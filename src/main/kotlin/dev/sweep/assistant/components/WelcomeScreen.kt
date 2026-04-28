@@ -15,6 +15,7 @@ import dev.sweep.assistant.theme.SweepColors
 import dev.sweep.assistant.theme.SweepIcons
 import dev.sweep.assistant.theme.SweepIcons.scale
 import dev.sweep.assistant.utils.SweepConstants.TOOLWINDOW_NAME
+import dev.sweep.assistant.views.LogViewerDialog
 import dev.sweep.assistant.views.RoundedButton
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
@@ -38,12 +39,9 @@ class WelcomeScreen(
                         }.align(AlignX.CENTER)
                 }.topGap(TopGap.SMALL)
                 row {
-                    text("Please sign in below:").applyToComponent { font = font.deriveFont(font.size * 1.1f) }.align(AlignX.CENTER)
-                }
-                row {
                     cell(
                         RoundedButton(
-                            text = " Sign in",
+                            text = " Open Settings ",
                             parentDisposable = parentDisposable,
                             onClick = {
                                 val isCloudEnvironment = SweepSettingsParser.isCloudEnvironment()
@@ -67,18 +65,23 @@ class WelcomeScreen(
                         },
                     ).align(AlignX.CENTER)
                 }.topGap(TopGap.SMALL)
-
                 row {
-                    text(
-                        """
-                        <div style='text-align: center; font-size: 1.1em;'>
-                        Sweep features:<br>
-                        <a href='https://docs.sweep.dev/agent'>Agent</a><br>
-                        <a href='https://docs.sweep.dev/autocomplete'>Autocomplete</a>
-                        </div>
-                        """.trimIndent(),
+                    cell(
+                        RoundedButton(
+                            text = " Log View ",
+                            parentDisposable = parentDisposable,
+                            onClick = {
+                                LogViewerDialog.show(project)
+                            },
+                        ).apply {
+                            icon = SweepIcons.Sweep16x16
+                            background = SweepColors.loginButtonColor
+                            foreground = SweepColors.textOnPrimary
+                            font = font.deriveFont(font.size * 1.2f)
+                            border = JBUI.Borders.empty(6, 24)
+                        },
                     ).align(AlignX.CENTER)
-                }.topGap(TopGap.MEDIUM)
+                }.topGap(TopGap.SMALL)
             }
 
         // Center the content panel both horizontally and vertically

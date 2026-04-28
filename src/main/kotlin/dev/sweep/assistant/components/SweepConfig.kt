@@ -2,15 +2,12 @@ package dev.sweep.assistant.components
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import com.google.gson.Gson
-import com.google.gson.GsonBuilder
-import com.google.gson.JsonArray
-import com.google.gson.JsonObject
-import com.google.gson.JsonParser
+import com.google.gson.*
 import com.google.gson.reflect.TypeToken
 import com.intellij.icons.AllIcons
 import com.intellij.ide.BrowserUtil
 import com.intellij.lang.annotation.HighlightSeverity
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
@@ -52,17 +49,12 @@ import dev.sweep.assistant.mcp.auth.McpOAuthTokenStorage
 import dev.sweep.assistant.services.FeatureFlagService
 import dev.sweep.assistant.services.LocalAutocompleteServerManager
 import dev.sweep.assistant.services.SweepMcpService
-import dev.sweep.assistant.settings.CustomPrompt
-import dev.sweep.assistant.settings.SweepEnvironmentConstants
+import dev.sweep.assistant.settings.*
 import dev.sweep.assistant.settings.SweepEnvironmentConstants.Messages.GITHUB_TOKEN_COMMENT
 import dev.sweep.assistant.settings.SweepEnvironmentConstants.Messages.SETTINGS_DESCRIPTION
-import dev.sweep.assistant.settings.SweepMetaData
-import dev.sweep.assistant.settings.SweepSettings
-import dev.sweep.assistant.settings.SweepSettingsParser
 import dev.sweep.assistant.theme.SweepColors
 import dev.sweep.assistant.theme.SweepColors.createHoverColor
 import dev.sweep.assistant.utils.*
-import dev.sweep.assistant.utils.getConnection
 import dev.sweep.assistant.views.*
 import kotlinx.coroutines.runBlocking
 import org.jetbrains.plugins.terminal.TerminalOptionsProvider
@@ -75,10 +67,9 @@ import java.awt.event.MouseEvent
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URI
-import java.util.Hashtable
+import java.util.*
 import javax.swing.*
-import javax.swing.DefaultListModel
-import javax.swing.ListSelectionModel
+import javax.swing.Timer
 
 /**
  * Enum representing the bash command auto-approve mode.
@@ -1045,6 +1036,34 @@ class SweepConfig(
 
     fun updateAutocompleteLocalPort(port: Int) {
         SweepSettings.getInstance().autocompleteLocalPort = port
+    }
+
+    fun getAutocompleteRemoteUrl(): String = SweepSettings.getInstance().autocompleteRemoteUrl
+
+    fun updateAutocompleteRemoteUrl(url: String) {
+        SweepSettings.getInstance().autocompleteRemoteUrl = url.trim()
+    }
+
+    fun getCommitMessageUrl(): String = SweepSettings.getInstance().commitMessageUrl
+
+    fun updateCommitMessageUrl(url: String) {
+        SweepSettings.getInstance().commitMessageUrl = url.trim()
+    }
+
+    fun getCommitMessageModel(): String = SweepSettings.getInstance().commitMessageModel
+
+    fun updateCommitMessageModel(model: String) {
+        SweepSettings.getInstance().commitMessageModel = model.trim()
+    }
+
+    /**
+     * Returns the effective autocomplete server URL.
+     * Priority: remote URL > localhost.
+     */
+    fun getEffectiveAutocompleteUrl(): String {
+        val remoteUrl = getAutocompleteRemoteUrl()
+        if (remoteUrl.isNotBlank()) return remoteUrl
+        return "http://localhost:${getAutocompleteLocalPort()}"
     }
 
     // Autocomplete exclusion banner visibility
@@ -4580,6 +4599,10 @@ class SweepConfig(
                                 anchor = GridBagConstraints.NORTHWEST
                             }
 
+                        // In autocomplete-only mode, hide non-autocomplete sections
+                        val isAutocompleteOnly =
+                            sweepSettings.autocompleteLocalMode && sweepSettings.autocompleteRemoteUrl.isNotBlank()
+
                         // API Settings header
                         gbc.gridy = 0
 
@@ -4592,24 +4615,27 @@ class SweepConfig(
                         )
 
                         // Add settings description
-                        gbc.gridy = 1
-                        add(
-                            JPanel(BorderLayout()).apply {
-                                border = JBUI.Borders.empty(0, 16, 8, 16)
-                                add(
-                                    JLabel(SETTINGS_DESCRIPTION).withSweepFont(project),
-                                    BorderLayout.WEST,
-                                )
-                            },
-                            gbc,
-                        )
+                        if (!isAutocompleteOnly) {
+                            gbc.gridy = 1
+                            add(
+                                JPanel(BorderLayout()).apply {
+                                    border = JBUI.Borders.empty(0, 16, 8, 16)
+                                    add(
+                                        JLabel(SETTINGS_DESCRIPTION).withSweepFont(project),
+                                        BorderLayout.WEST,
+                                    )
+                                },
+                                gbc,
+                            )
+                        }
 
                         // GitHub Token
-                        gbc.gridy = 2
-                        add(
-                            JPanel().apply {
-                                layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                                border = JBUI.Borders.empty(8, 16)
+                        if (!isAutocompleteOnly) {
+                            gbc.gridy = 2
+                            add(
+                                JPanel().apply {
+                                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                                    border = JBUI.Borders.empty(8, 16)
 
                                 val tokenLabel =
                                     JLabel(
@@ -4668,8 +4694,10 @@ class SweepConfig(
                             },
                             gbc,
                         )
+                        } // end if (!isAutocompleteOnly) for GitHub Token
 
                         // Base URL
+                        if (!isAutocompleteOnly) {
                         gbc.gridy = 3
                         if (!SweepSettingsParser.isCloudEnvironment()) {
                             add(
@@ -4739,8 +4767,10 @@ class SweepConfig(
                                 gbc,
                             )
                         }
+                        } // end if (!isAutocompleteOnly) for Base URL
 
                         // Relogin button at bottom - only in cloud environment
+                        if (!isAutocompleteOnly) {
                         if (SweepSettingsParser.isCloudEnvironment()) {
                             gbc.gridy = 4
                             add(
@@ -4776,6 +4806,7 @@ class SweepConfig(
                                 gbc,
                             )
                         }
+                        } // end if (isAutocompleteOnly)
 
                         // Local Autocomplete section
                         gbc.gridy = 6
@@ -4840,7 +4871,7 @@ class SweepConfig(
                             gbc,
                         )
 
-                        // Port + Start Server inline
+                        // Check Server button
                         gbc.gridy = 8
                         add(
                             JPanel().apply {
@@ -4848,34 +4879,34 @@ class SweepConfig(
                                 border = JBUI.Borders.empty(4, 40, 8, 16)
 
                                 add(
-                                    JLabel("Port").apply {
+                                    JButton("Check Server", AllIcons.Actions.Execute).apply {
                                         withSweepFont(project)
-                                    },
-                                )
-                                add(Box.createRigidArea(Dimension(8.scaled, 0)))
-                                add(
-                                    JTextField(getAutocompleteLocalPort().toString(), 5).apply {
-                                        withSweepFont(project)
-                                        maximumSize = Dimension(80.scaled, 30.scaled)
-                                        addFocusListener(
-                                            object : java.awt.event.FocusAdapter() {
-                                                override fun focusLost(e: java.awt.event.FocusEvent?) {
-                                                    text.toIntOrNull()?.let { port ->
-                                                        if (port in 1..65535) {
-                                                            updateAutocompleteLocalPort(port)
-                                                        }
+                                        toolTipText = "Check if the remote autocomplete server is reachable"
+                                        addActionListener {
+                                            ApplicationManager.getApplication().executeOnPooledThread {
+                                                val healthy =
+                                                    LocalAutocompleteServerManager.getInstance().isServerHealthy()
+                                                val serverUrl =
+                                                    LocalAutocompleteServerManager.getInstance().getServerUrl()
+                                                ApplicationManager.getApplication().invokeLater {
+                                                    if (healthy) {
+                                                        showNotification(
+                                                            project,
+                                                            "Autocomplete Server",
+                                                            "Server is running at $serverUrl",
+                                                            "Sweep Autocomplete",
+                                                        )
+                                                    } else {
+                                                        showNotification(
+                                                            project,
+                                                            "Autocomplete Server",
+                                                            "Server is not reachable at $serverUrl",
+                                                            "Sweep Autocomplete",
+                                                            notificationType = NotificationType.WARNING,
+                                                        )
                                                     }
                                                 }
-                                            },
-                                        )
-                                    },
-                                )
-                                add(Box.createRigidArea(Dimension(12.scaled, 0)))
-                                add(
-                                    JButton("Start Server", AllIcons.Actions.Execute).apply {
-                                        withSweepFont(project)
-                                        addActionListener {
-                                            LocalAutocompleteServerManager.getInstance().startServerInTerminal(project)
+                                            }
                                         }
                                     },
                                 )
@@ -4884,8 +4915,121 @@ class SweepConfig(
                             gbc,
                         )
 
-                        // Add filler to push everything to the top
+                        // Remote URL field
                         gbc.gridy = 9
+                        add(
+                            JPanel().apply {
+                                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                                border = JBUI.Borders.empty(4, 40, 4, 16)
+                                add(
+                                    JLabel("Remote URL (GPU server)").apply {
+                                        withSweepFont(project)
+                                    },
+                                )
+                                add(Box.createRigidArea(Dimension(0, 4.scaled)))
+                                add(
+                                    JTextField(getAutocompleteRemoteUrl(), 20).apply {
+                                        withSweepFont(project)
+                                        toolTipText =
+                                            "Optional: URL to a remote GPU sweep-autocomplete server (e.g. http://gpu-server:8081). When set, no local server process will be started."
+                                        addFocusListener(
+                                            object : java.awt.event.FocusAdapter() {
+                                                override fun focusLost(e: java.awt.event.FocusEvent?) {
+                                                    updateAutocompleteRemoteUrl(text)
+                                                }
+                                            },
+                                        )
+                                    },
+                                )
+                                add(Box.createRigidArea(Dimension(0, 2.scaled)))
+                                add(
+                                    JLabel("Leave empty to use local uvx server. Set to connect to a remote GPU server.").apply {
+                                        withSweepFont(project, scale = 0.85f)
+                                        foreground = JBColor.GRAY
+                                        font = font.deriveFont(Font.ITALIC)
+                                    },
+                                )
+                            },
+                            gbc,
+                        )
+
+                        // Commit Message LLM URL
+                        gbc.gridy = 10
+                        add(
+                            JPanel().apply {
+                                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                                border = JBUI.Borders.empty(4, 40, 4, 16)
+                                add(
+                                    JLabel("Commit Message LLM URL").apply {
+                                        withSweepFont(project)
+                                    },
+                                )
+                                add(Box.createRigidArea(Dimension(0, 4.scaled)))
+                                add(
+                                    JTextField(getCommitMessageUrl(), 20).apply {
+                                        withSweepFont(project)
+                                        toolTipText =
+                                            "Optional: custom LLM endpoint for generating commit messages (e.g. http://llm-server:8000)"
+                                        addFocusListener(
+                                            object : java.awt.event.FocusAdapter() {
+                                                override fun focusLost(e: java.awt.event.FocusEvent?) {
+                                                    updateCommitMessageUrl(text)
+                                                }
+                                            },
+                                        )
+                                    },
+                                )
+                                add(Box.createRigidArea(Dimension(0, 2.scaled)))
+                                add(
+                                    JLabel("Custom LLM endpoint for create_commit_message API. Leave empty to use autocomplete server.").apply {
+                                        withSweepFont(project, scale = 0.85f)
+                                        foreground = JBColor.GRAY
+                                        font = font.deriveFont(Font.ITALIC)
+                                    },
+                                )
+                            },
+                            gbc,
+                        )
+
+                        // Commit Message Model
+                        gbc.gridy = 11
+                        add(
+                            JPanel().apply {
+                                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                                border = JBUI.Borders.empty(4, 40, 8, 16)
+                                add(
+                                    JLabel("Commit Message Model").apply {
+                                        withSweepFont(project)
+                                    },
+                                )
+                                add(Box.createRigidArea(Dimension(0, 4.scaled)))
+                                add(
+                                    JTextField(getCommitMessageModel(), 20).apply {
+                                        withSweepFont(project)
+                                        toolTipText = "Optional: model name for commit message generation"
+                                        addFocusListener(
+                                            object : java.awt.event.FocusAdapter() {
+                                                override fun focusLost(e: java.awt.event.FocusEvent?) {
+                                                    updateCommitMessageModel(text)
+                                                }
+                                            },
+                                        )
+                                    },
+                                )
+                                add(Box.createRigidArea(Dimension(0, 2.scaled)))
+                                add(
+                                    JLabel("Optional model name for the commit message LLM.").apply {
+                                        withSweepFont(project, scale = 0.85f)
+                                        foreground = JBColor.GRAY
+                                        font = font.deriveFont(Font.ITALIC)
+                                    },
+                                )
+                            },
+                            gbc,
+                        )
+
+                        // Add filler to push everything to the top
+                        gbc.gridy = 12
                         gbc.weighty = 1.0
                         gbc.fill = GridBagConstraints.BOTH
                         add(JPanel(), gbc)
@@ -5984,17 +6128,6 @@ class SweepConfig(
                     addTab("Features", generalSettingsPanel)
                     addTab("Account", apiSettingsPanel)
 
-                    // Only add Agent, MCP Servers, and Rules tabs if NOT in frontend mode
-                    if (!SweepConstants.IS_FRONTEND_MODE) {
-                        addTab("Agent", toolCallsSettingsPanel)
-                        addTab("MCP Servers", mcpServersSettingsPanel)
-                        addTab("Rules", rulesPanel)
-                    }
-
-                    addTab("BYOK", byokPanel)
-                    addTab("Custom Prompts", customPromptsPanel)
-                    addTab("Advanced", advancedSettingsPanel)
-
                     // Select tab based on tabName parameter, default to 0
                     selectedIndex =
                         if (tabName != null) {
@@ -6005,17 +6138,6 @@ class SweepConfig(
                 } else {
                     addTab("Features", generalSettingsPanel)
                     addTab("Account", apiSettingsPanel)
-
-                    // Only add Agent, MCP Servers, and Rules tabs if NOT in frontend mode
-                    if (!SweepConstants.IS_FRONTEND_MODE) {
-                        addTab("Agent", toolCallsSettingsPanel)
-                        addTab("MCP Servers (Beta)", mcpServersSettingsPanel)
-                        addTab("Rules", rulesPanel)
-                    }
-
-                    addTab("BYOK", byokPanel)
-                    addTab("Custom Prompts", customPromptsPanel)
-                    addTab("Advanced", advancedSettingsPanel)
 
                     // Select tab based on tabName parameter, default to API Settings (1)
                     selectedIndex =

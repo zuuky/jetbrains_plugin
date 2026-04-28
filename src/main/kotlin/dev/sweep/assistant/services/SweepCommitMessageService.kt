@@ -11,25 +11,22 @@ import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vcs.FilePath
 import com.intellij.openapi.vcs.VcsDataKeys
-import com.intellij.openapi.vcs.changes.*
+import com.intellij.openapi.vcs.changes.Change
+import com.intellij.openapi.vcs.changes.ChangeListManager
 import com.intellij.openapi.vcs.ui.CommitMessage
 import com.intellij.openapi.wm.IdeFocusManager
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.openapi.wm.ex.ToolWindowManagerListener
 import com.intellij.serviceContainer.AlreadyDisposedException
 import com.intellij.util.messages.MessageBusConnection
-import com.intellij.vcs.commit.*
+import com.intellij.vcs.commit.CommitMessageUi
 import dev.sweep.assistant.components.SweepConfig
 import dev.sweep.assistant.data.CommitMessageRequest
-import dev.sweep.assistant.utils.PartialChangeInfo
-import dev.sweep.assistant.utils.generateCombinedDiffString
-import dev.sweep.assistant.utils.generateDiffStringFromChanges
-import dev.sweep.assistant.utils.generateDiffStringFromUnversionedFiles
-import dev.sweep.assistant.utils.getConnection
-import dev.sweep.assistant.utils.getCurrentBranchName
-import dev.sweep.assistant.utils.getRecentCommitMessages
-import kotlinx.serialization.json.Json
+import dev.sweep.assistant.settings.SweepSettings
+import dev.sweep.assistant.utils.*
+import kotlinx.serialization.json.*
 import java.net.HttpURLConnection
+import java.net.URI
 import java.time.Instant
 import java.util.concurrent.CancellationException
 import java.util.concurrent.Future
@@ -43,6 +40,8 @@ class SweepCommitMessageService(
     private var lastUpdateTime: Long = 0
     private var messageBusConnection: MessageBusConnection? = null
     private val runningTasks = mutableListOf<Future<*>>()
+    private var _isGenerating: Boolean = false
+    val isGenerating: Boolean get() = _isGenerating
 
     init {
         messageBusConnection = project.messageBus.connect(this) // Connect with disposable
@@ -118,6 +117,15 @@ class SweepCommitMessageService(
             return
         }
 
+        // Prevent concurrent generation requests
+        synchronized(this) {
+            if (_isGenerating) {
+                logger.debug("Skipping commit message update: generation already in progress")
+                return
+            }
+            _isGenerating = true
+        }
+
         try {
             lastUpdateTime = Instant.now().toEpochMilli()
 
@@ -126,10 +134,16 @@ class SweepCommitMessageService(
 
             val apiResponse = generateCommitMessage(selectedChanges, partialChanges, unversionedFiles)
 
-            if (project.isDisposed) return // Check again after potentially long operation
+            if (project.isDisposed) {
+                _isGenerating = false
+                return
+            }
 
             ApplicationManager.getApplication().invokeLater {
-                if (project.isDisposed) return@invokeLater
+                if (project.isDisposed) {
+                    _isGenerating = false
+                    return@invokeLater
+                }
 
                 commitMessage.let { ui ->
                     val currentMessage = ui.text
@@ -142,19 +156,24 @@ class SweepCommitMessageService(
                         ui.text = apiResponse
                     }
                 }
+                _isGenerating = false
             }
         } catch (e: ProcessCanceledException) {
             // Rethrow ProcessCanceledException as required by IntelliJ
+            _isGenerating = false
             throw e
         } catch (e: AlreadyDisposedException) {
             // Project/service is disposed, this is expected during shutdown - don't log as error
             logger.debug("Project disposed during commit message generation")
+            _isGenerating = false
             throw e
         } catch (_: CancellationException) {
             // Task was cancelled, which is expected during shutdown
             logger.debug("Commit message generation cancelled")
+            _isGenerating = false
         } catch (e: Exception) {
             logger.warn("Error making API call", e)
+            _isGenerating = false
         }
     }
 
@@ -169,7 +188,6 @@ class SweepCommitMessageService(
         unversionedFiles: List<FilePath> = emptyList(),
     ): String {
         if (project.isDisposed) return ""
-
         val currentBranch = getCurrentBranchName(project)
         val changeListManager = ChangeListManager.getInstance(project)
         val defaultChangeList = changeListManager.defaultChangeList
@@ -180,7 +198,6 @@ class SweepCommitMessageService(
             } else {
                 defaultChangeList.changes.toList()
             }
-
         // Check disposal status before generating diff
         if (project.isDisposed) return ""
 
@@ -219,7 +236,6 @@ class SweepCommitMessageService(
             } else {
                 ""
             }
-
         // Optional user-provided commit message template
         // Priority: Project-specific sweep-commit-template.md > Global ~/.sweep/sweep-commit-template.md
         val commitTemplate: String? =
@@ -228,16 +244,83 @@ class SweepCommitMessageService(
             } catch (_: Exception) {
                 null
             }
-
         var commitMessage = ""
         try {
             var connection: HttpURLConnection? = null
             try {
-                connection = getConnection("backend/create_commit_message")
+                // Use custom commit message URL if configured, otherwise fall back to getConnection
+                val commitMessageUrl = SweepSettings.getInstance().commitMessageUrl
+                val commitMessageModel = SweepSettings.getInstance().commitMessageModel
 
-                // Set timeouts to prevent hanging
-                connection.connectTimeout = 10000 // 10 seconds
-                connection.readTimeout = 30000 // 30 seconds
+                if (commitMessageUrl.isNotBlank()) {
+                    // Use OpenAI-compatible chat completions API (non-streaming)
+                    val url = URI("${commitMessageUrl.trimEnd('/')}/v1/chat/completions").toURL()
+                    connection = (url.openConnection() as HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        doOutput = true
+                        setRequestProperty("Content-Type", "application/json")
+                        setRequestProperty("Authorization", "Bearer ${SweepSettings.getInstance().githubToken}")
+                        connectTimeout = 10000
+                        readTimeout = 30000
+                    }
+
+                    // Build system prompt
+                    val systemPrompt = buildString {
+                        append("You are a concise commit message generator. Generate a clear, conventional commit message based on the provided diff.")
+                        if (commitTemplate != null) {
+                            append("\n\nCommit message template:\n$commitTemplate")
+                        }
+                        if (previousCommitsString.isNotBlank()) {
+                            append("\n\nRecent commit messages for style reference:\n$previousCommitsString")
+                        }
+                    }
+
+                    // Build user prompt
+                    val userPrompt = buildString {
+                        append("Branch: ${currentBranch ?: "unknown"}\n\n")
+                        append("Diff:\n$diffString")
+                    }
+
+                    // Build OpenAI-style request body using buildJsonObject
+                    val requestBody = buildJsonObject {
+                        if (commitMessageModel.isNotBlank()) {
+                            put("model", commitMessageModel)
+                        }
+                        put("messages", buildJsonArray {
+                            addJsonObject {
+                                put("role", "system")
+                                put("content", systemPrompt)
+                            }
+                            addJsonObject {
+                                put("role", "user")
+                                put("content", userPrompt)
+                            }
+                        })
+                        put("stream", false)
+                    }.toString()
+
+                    connection.outputStream.use { os ->
+                        os.write(requestBody.toByteArray())
+                        os.flush()
+                    }
+
+                    val response = connection.inputStream.bufferedReader().use { it.readText() }
+                    val responseJson = Json.parseToJsonElement(response).jsonObject
+                    val choices = responseJson["choices"]?.jsonArray
+                    if (!choices.isNullOrEmpty()) {
+                        val message = choices[0].jsonObject["message"]?.jsonObject
+                        val content = message?.get("content")?.jsonPrimitive?.contentOrNull
+                        if (!content.isNullOrBlank()) {
+                            return content.trim()
+                        }
+                    }
+                    // If we get here, the response didn't contain a valid message, fall through to default
+                } else {
+                    // Fall back to default getConnection (uses baseUrl or autocompleteRemoteUrl)
+                    connection = getConnection("backend/create_commit_message")
+                    connection.connectTimeout = 10000
+                    connection.readTimeout = 30000
+                }
 
                 val commitMessageRequest =
                     CommitMessageRequest(
@@ -245,6 +328,7 @@ class SweepCommitMessageService(
                         previous_commits = previousCommitsString,
                         branch = currentBranch ?: "",
                         commit_template = commitTemplate,
+                        model = commitMessageModel.takeIf { it.isNotBlank() },
                     )
                 val json = Json { encodeDefaults = true }
                 val postData = json.encodeToString(CommitMessageRequest.serializer(), commitMessageRequest)
@@ -253,10 +337,8 @@ class SweepCommitMessageService(
                     os.write(postData.toByteArray())
                     os.flush()
                 }
-
                 val response = connection.inputStream.bufferedReader().use { it.readText() }
                 val newCommitMessage = json.decodeFromString<Map<String, String>>(response)["commit_message"]
-
                 commitMessage = newCommitMessage.toString()
             } finally {
                 connection?.disconnect()

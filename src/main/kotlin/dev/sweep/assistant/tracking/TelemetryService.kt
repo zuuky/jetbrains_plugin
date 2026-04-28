@@ -46,11 +46,18 @@ class TelemetryService {
     private val logger = Logger.getInstance(TelemetryService::class.java)
     private val scope = CoroutineScope(Dispatchers.IO)
 
+    private fun isTelemetryEnabled(): Boolean {
+        // Skip telemetry when in autocomplete local/remote mode (self-hosted)
+        val settings = SweepSettings.getInstance()
+        return !(settings.autocompleteLocalMode && settings.autocompleteRemoteUrl.isNotBlank())
+    }
+
     fun sendUsageEvent(
         eventType: EventType,
         userProperties: Map<String, String> = emptyMap(),
         eventProperties: Map<String, String> = emptyMap(),
     ) {
+        if (!isTelemetryEnabled()) return
         scope.launch {
             try {
                 val usageEvent =
@@ -89,6 +96,7 @@ class TelemetryService {
 
     // Note that this is for our own backend metrics page to mark this as a success
     fun reportUserStoppingChatEvent(project: Project) {
+        if (!isTelemetryEnabled()) return
         scope.launch {
             try {
                 val currentMode = SweepComponent.getMode(project)

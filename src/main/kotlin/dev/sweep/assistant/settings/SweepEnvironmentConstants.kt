@@ -29,14 +29,8 @@ object SweepEnvironmentConstants {
     }
 
     object Defaults {
-        val DEFAULT_BASE_URL =
-            if (IS_CLOUD_ENVIRONMENT) {
-                "https://backend.app.sweep.dev" // Default to our base url
-            } else {
-                "" // Empty string for non-cloud environment
-            }
+        val DEFAULT_BASE_URL = ""
 
-        val BILLING_URL =
-            "https://app.sweep.dev/billing"
+        val BILLING_URL = ""
     }
 }

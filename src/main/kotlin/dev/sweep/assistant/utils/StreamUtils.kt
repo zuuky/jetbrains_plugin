@@ -31,7 +31,17 @@ fun getConnection(
     readTimeoutMs: Int = 30_000,
     authorization: String = "Bearer ${SweepSettings.getInstance().githubToken}",
 ): HttpURLConnection {
-    val baseUrl = SweepSettings.getInstance().baseUrl
+    val settings = SweepSettings.getInstance()
+    var baseUrl = settings.baseUrl
+    // If baseUrl is empty but autocomplete remote URL is configured, use it as fallback
+    // This allows backend API calls (like commit messages) to reach the configured server
+    if (baseUrl.isBlank() && settings.autocompleteLocalMode && settings.autocompleteRemoteUrl.isNotBlank()) {
+        baseUrl = settings.autocompleteRemoteUrl
+    }
+    // Skip requests to backend/ endpoints
+    if (relativeURL.startsWith("backend/")) {
+        throw IOException("Skipping backend request: $relativeURL (backend requests are disabled)")
+    }
     val url = URI("$baseUrl/$relativeURL").toURL()
     return (url.openConnection() as HttpURLConnection).apply {
         requestMethod = "POST"
@@ -64,13 +74,11 @@ suspend fun <T> sendToApi(
         val connection = getConnection(endpoint)
         val json = Json { encodeDefaults = true }
         val postData = json.encodeToString(serializer, data)
-
         try {
             connection.outputStream.use { os ->
                 os.write(postData.toByteArray())
                 os.flush()
             }
-
             connection.inputStream.bufferedReader().use { it.readText() }
         } catch (e: Exception) {
             throw IOException("Error communicating with Sweep API at $endpoint: ${e.message}", e)
@@ -88,28 +96,9 @@ suspend fun getUsername(): UsernameResponse? =
     withContext(Dispatchers.IO) {
         try {
             val baseUrl = SweepSettings.getInstance().baseUrl
-            val url = URI("$baseUrl/backend/get_username").toURL()
-            val connection =
-                (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    setRequestProperty("http.nonProxyHosts", "*")
-                    setRequestProperty("Authorization", "Bearer ${SweepSettings.getInstance().githubToken}")
-                    connectTimeout = 10_000
-                    readTimeout = 10_000
-                }
-
-            try {
-                if (connection.responseCode == HttpURLConnection.HTTP_OK) {
-                    val responseText = connection.inputStream.bufferedReader().use { it.readText() }
-                    val json = Json { ignoreUnknownKeys = true }
-                    json.decodeFromString<UsernameResponse>(responseText)
-                } else {
-                    null
-                }
-            } finally {
-                connection.disconnect()
-            }
-        } catch (e: Exception) {
+            // Skip requests to backend/ endpoints
+            throw IOException("Skipping backend request: $baseUrl/backend/get_username (backend requests are disabled)")
+        } catch (_: Exception) {
             null
         }
     }

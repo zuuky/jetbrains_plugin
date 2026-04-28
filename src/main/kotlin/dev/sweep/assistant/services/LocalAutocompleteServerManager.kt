@@ -10,7 +10,10 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindowManager
 import dev.sweep.assistant.agent.tools.TerminalApiWrapper
 import dev.sweep.assistant.settings.SweepSettings
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import org.jetbrains.plugins.terminal.TerminalToolWindowFactory
 import org.jetbrains.plugins.terminal.TerminalToolWindowManager
 import java.io.File
@@ -25,7 +28,7 @@ import java.util.concurrent.TimeUnit
 class LocalAutocompleteServerManager : Disposable {
     companion object {
         private val logger = Logger.getInstance(LocalAutocompleteServerManager::class.java)
-        private const val DEFAULT_PORT = 8081
+        private const val DEFAULT_PORT = 8006
         private const val HEALTH_CHECK_TIMEOUT_MS = 3000L
         private const val SERVER_START_TIMEOUT_MS = 30000L
         private const val SERVER_POLL_INTERVAL_MS = 500L
@@ -59,13 +62,28 @@ class LocalAutocompleteServerManager : Disposable {
             DEFAULT_PORT
         }
 
-    fun getServerUrl(): String = "http://localhost:${getPort()}"
+    private fun getConfiguredRemoteUrl(): String? {
+        val url = try {
+            SweepSettings.getInstance().autocompleteRemoteUrl
+        } catch (_: Exception) {
+            null
+        }
+        return url?.takeIf { it.isNotBlank() }
+    }
+
+    fun getServerUrl(): String = getConfiguredRemoteUrl() ?: "http://localhost:${getPort()}"
 
     fun ensureServerRunning() {
         ensureServerRunning(null)
     }
 
     fun ensureServerRunning(onStatus: ((String) -> Unit)?) {
+        // When a remote URL is configured, no local server process is needed
+        if (getConfiguredRemoteUrl() != null) {
+            onStatus?.invoke("Remote server URL configured, skipping local server startup.")
+            return
+        }
+
         onStatus?.invoke("Checking if server is already running...")
         if (isServerHealthy()) {
             onStatus?.invoke("Server is already running.")
@@ -78,12 +96,14 @@ class LocalAutocompleteServerManager : Disposable {
         startServer(onStatus)
     }
 
-    fun isServerHealthy(): Boolean =
-        try {
+    fun isServerHealthy(): Boolean {
+        return try {
+            val url = getServerUrl()
+            // Try to make an HTTP request to the server at the /health or root endpoint
             val request =
                 HttpRequest
                     .newBuilder()
-                    .uri(URI.create(getServerUrl()))
+                    .uri(URI.create("$url/health"))
                     .timeout(Duration.ofMillis(HEALTH_CHECK_TIMEOUT_MS))
                     .GET()
                     .build()
@@ -92,11 +112,19 @@ class LocalAutocompleteServerManager : Disposable {
         } catch (e: Exception) {
             false
         }
+    }
 
     @Synchronized
     private fun startServer(onStatus: ((String) -> Unit)? = null) {
         if (isStarting) return
         if (isServerHealthy()) return
+
+        // If remote URL is configured, no local process to start
+        if (getConfiguredRemoteUrl() != null) {
+            onStatus?.invoke("Remote server URL configured, skipping local server startup.")
+            return
+        }
+
         isStarting = true
 
         try {

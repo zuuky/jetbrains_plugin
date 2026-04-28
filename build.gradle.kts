@@ -4,13 +4,11 @@ import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.jetbrains.intellij.platform.gradle.models.ProductRelease
 
 plugins {
-    application
     id("java")
     id("org.jetbrains.intellij.platform") version "2.2.0"
     kotlin("jvm") version "2.1.0"
     id("com.google.protobuf") version "0.9.4"
     kotlin("plugin.serialization") version "1.9.20"
-    id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
 val remoteRobotVersion = "0.11.20"

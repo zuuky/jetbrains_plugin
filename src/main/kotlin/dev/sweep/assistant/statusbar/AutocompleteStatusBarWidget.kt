@@ -106,7 +106,14 @@ class AutocompleteStatusBarWidget(
 
     override fun getTooltipText(): String =
         when {
-            SweepConfig.getInstance(project).isAutocompleteLocalMode() -> "Sweep Autocomplete: Local Mode - Click for options"
+            SweepConfig.getInstance(project).isAutocompleteLocalMode() -> {
+                val remoteUrl = SweepConfig.getInstance(project).getAutocompleteRemoteUrl()
+                if (remoteUrl.isNotBlank()) {
+                    "Sweep Autocomplete: Remote ($remoteUrl) - Click for options"
+                } else {
+                    "Sweep Autocomplete: Local Mode - Click for options"
+                }
+            }
             snoozeService.isAutocompleteSnooze() -> {
                 val remaining = snoozeService.formatRemainingTime()
                 "Sweep Autocomplete: Snoozed ($remaining remaining) - Click for options"

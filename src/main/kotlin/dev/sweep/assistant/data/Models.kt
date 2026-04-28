@@ -1,10 +1,6 @@
 package dev.sweep.assistant.data
 
-import com.fasterxml.jackson.annotation.JsonCreator
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.fasterxml.jackson.annotation.JsonProperty
-import com.fasterxml.jackson.annotation.JsonSetter
-import com.fasterxml.jackson.annotation.Nulls
+import com.fasterxml.jackson.annotation.*
 import com.intellij.openapi.application.PermanentInstallationID
 import dev.sweep.assistant.utils.baseNameFromPathString
 import dev.sweep.assistant.utils.getDebugInfo
@@ -551,6 +547,7 @@ data class CommitMessageRequest(
     val previous_commits: String,
     val branch: String,
     val commit_template: String? = null,
+    val model: String? = null,
 ) : BaseRequest()
 
 @Serializable

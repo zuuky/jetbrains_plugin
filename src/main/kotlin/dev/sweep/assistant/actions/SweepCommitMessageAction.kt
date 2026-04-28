@@ -22,6 +22,25 @@ class SweepCommitMessageAction : AnAction() {
         }
     }
 
+    override fun update(e: AnActionEvent) {
+        val project = e.project
+        val presentation = e.presentation
+
+        if (project == null) {
+            presentation.isEnabled = false
+            return
+        }
+
+        val service = SweepCommitMessageService.getInstance(project)
+        if (service.isGenerating) {
+            presentation.isEnabled = false
+            presentation.text = "Generating..."
+        } else {
+            presentation.isEnabled = true
+            presentation.text = "Generate New Commit Message"
+        }
+    }
+
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
         val sweepCommitMessageService = SweepCommitMessageService.getInstance(project)
@@ -32,6 +51,10 @@ class SweepCommitMessageAction : AnAction() {
         val abstractCommitWorkflowHandler = e.getData(VcsDataKeys.COMMIT_WORKFLOW_HANDLER) as? AbstractCommitWorkflowHandler<*, *>
         val selectedChanges = abstractCommitWorkflowHandler?.ui?.getIncludedChanges() ?: emptyList()
         val unversionedFiles = abstractCommitWorkflowHandler?.ui?.getIncludedUnversionedFiles() ?: emptyList()
+
+        // Check again in case of race condition
+        if (sweepCommitMessageService.isGenerating) return
+
         ProgressManager.getInstance().run(
             object : Task.Backgroundable(project, "Generating Commit Message...", false) {
                 override fun run(indicator: ProgressIndicator) {

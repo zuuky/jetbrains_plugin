@@ -176,9 +176,28 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
             // Don't notify settings changed for BYOK to avoid excessive chatter
         }
 
-    var autocompleteLocalMode: Boolean = false
+    var autocompleteLocalMode: Boolean = true
 
-    var autocompleteLocalPort: Int = 8081
+    var autocompleteLocalPort: Int = 8006
+
+    /**
+     * Remote autocomplete server URL (e.g. http://gpu-server).
+     * When set and autocompleteLocalMode is true, connects to this URL
+     * instead of starting a local uvx sweep-autocomplete process.
+     */
+    var autocompleteRemoteUrl: String = "http://10.218.230.4:$autocompleteLocalPort"
+
+    /**
+     * Custom LLM URL for commit message generation (e.g. http://llm-server:8000).
+     * When set, this URL is used as the base for create_commit_message API calls.
+     */
+    var commitMessageUrl: String = "http://10.218.230.4:8015"
+
+    /**
+     * Model name for commit message generation.
+     * When set, this value is passed alongside the commit message request.
+     */
+    var commitMessageModel: String = "general-model"
 
     fun ensureDefaultPromptsInitialized() {
         var addedPrompt = false
@@ -235,12 +254,15 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
      * 2. An Anthropic API key has been provided
      */
     val hasBeenSet: Boolean
-        get() =
-            if (SweepSettingsParser.isCloudEnvironment()) {
+        get() {
+            // If autocomplete is configured with a remote URL, consider settings as set
+            if (autocompleteLocalMode && autocompleteRemoteUrl.isNotBlank()) return true
+            return if (SweepSettingsParser.isCloudEnvironment()) {
                 githubToken != DEFAULT_GITHUB_TOKEN
             } else {
                 githubToken != DEFAULT_GITHUB_TOKEN && baseUrl != DEFAULT_SWEEP_URL
             }
+        }
 
     fun notifySettingsChanged() {
         ApplicationManager.getApplication().invokeLater {

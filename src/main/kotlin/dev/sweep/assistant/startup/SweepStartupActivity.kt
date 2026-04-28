@@ -1,17 +1,11 @@
 package dev.sweep.assistant.startup
 
 import com.intellij.ide.BrowserUtil
-import com.intellij.ide.actions.ShowSettingsUtilImpl
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
-import com.intellij.openapi.actionSystem.ActionManager
-import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.actionSystem.Anchor
-import com.intellij.openapi.actionSystem.Constraints
-import com.intellij.openapi.actionSystem.DefaultActionGroup
-import com.intellij.openapi.actionSystem.KeyboardShortcut
+import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.LogLevel
 import com.intellij.openapi.diagnostic.Logger
@@ -38,19 +32,13 @@ import dev.sweep.assistant.controllers.TerminalManagerService
 import dev.sweep.assistant.data.ProjectFilesCache
 import dev.sweep.assistant.entities.EntitiesCache
 import dev.sweep.assistant.services.*
-import dev.sweep.assistant.services.GatewayOnboardingService
 import dev.sweep.assistant.settings.SweepMetaData
 import dev.sweep.assistant.settings.SweepSettings
 import dev.sweep.assistant.settings.SweepSettingsParser
 import dev.sweep.assistant.statusbar.FrontendStatusBarWidgetFactory
 import dev.sweep.assistant.tracking.EventType
 import dev.sweep.assistant.tracking.TelemetryService
-import dev.sweep.assistant.utils.SweepConstants
-import dev.sweep.assistant.utils.disableFullLineCompletion
-import dev.sweep.assistant.utils.disableFullLineCompletionAndNotify
-import dev.sweep.assistant.utils.logStartupData
-import dev.sweep.assistant.utils.showNotification
-import dev.sweep.assistant.utils.untrackIdeaFile
+import dev.sweep.assistant.utils.*
 import java.awt.event.KeyEvent
 import java.util.concurrent.TimeUnit
 import javax.swing.KeyStroke
@@ -318,16 +306,42 @@ class SweepStartupActivity :
             metaData.privacyModeEnabled = oldPrivacyMode
             metaData.hasPrivacyModeBeenUpdatedFromProject = true
         }
-
         // Show Gateway onboarding notification if needed
         GatewayOnboardingService.getInstance().showGatewayOnboardingIfNeeded(project)
-
         // Check for dual plugin installation (Cloud + Enterprise)
         checkForDualPluginInstallation(project)
-
         // Ensure accept/reject actions are bound
         ApplicationManager.getApplication().invokeLater {
             ensureEditAutocompleteActionsAreBound()
+        }
+        // Auto-check autocomplete health on startup when in local/remote mode
+        checkAutocompleteHealthOnStartup(project)
+    }
+
+    private fun checkAutocompleteHealthOnStartup(project: Project) {
+        val settings = SweepSettings.getInstance()
+        if (settings.autocompleteLocalMode && settings.autocompleteRemoteUrl.isNotBlank()) {
+            val logger = Logger.getInstance(SweepStartupActivity::class.java)
+            ApplicationManager.getApplication().executeOnPooledThread {
+                try {
+                    val manager = LocalAutocompleteServerManager.getInstance()
+                    val healthy = manager.isServerHealthy()
+                    if (healthy) {
+                        logger.info("Autocomplete remote server is healthy: ${manager.getServerUrl()}")
+                    } else {
+                        logger.warn("Autocomplete remote server is not reachable: ${manager.getServerUrl()}")
+                        showNotification(
+                            project = project,
+                            title = "Autocomplete Server Unreachable",
+                            body = "Cannot connect to autocomplete server at ${manager.getServerUrl()}. Check your network and server status.",
+                            notificationGroup = "Sweep Autocomplete",
+                            notificationType = NotificationType.WARNING,
+                        )
+                    }
+                } catch (e: Exception) {
+                    logger.warn("Failed to check autocomplete health on startup: ${e.message}")
+                }
+            }
         }
     }
 

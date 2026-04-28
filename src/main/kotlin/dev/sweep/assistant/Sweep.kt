@@ -326,12 +326,10 @@ class Sweep :
         project: Project,
         toolWindow: ToolWindow,
         showToolWindow: Boolean = true,
-    ) = if (!SweepSettings.getInstance().hasBeenSet) {
+    ) {
+        // Always show settings page when opening the tool window
         TutorialPage.showAutoCompleteTutorial(project, forceShow = false)
         redirectToSettingsPage(toolWindow, project, true)
-    } else {
-//        TutorialPage.showChatTutorial(project, forceShow = false)
-        displayChatInterface(project, toolWindow, showToolWindow)
     }
 
     override fun createToolWindowContent(

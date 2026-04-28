@@ -9,7 +9,8 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
-import com.intellij.openapi.editor.*
+import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.RangeMarker
 import com.intellij.openapi.editor.actionSystem.EditorActionHandler
 import com.intellij.openapi.editor.actionSystem.EditorActionManager
@@ -32,46 +33,20 @@ import com.intellij.ui.awt.RelativePoint
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBViewport
 import dev.sweep.assistant.agent.tools.ToolType
-import dev.sweep.assistant.data.CmdKRequest
-import dev.sweep.assistant.data.CmdKSession
-import dev.sweep.assistant.data.FileInfo
-import dev.sweep.assistant.data.Message
-import dev.sweep.assistant.data.MessageRole
+import dev.sweep.assistant.data.*
 import dev.sweep.assistant.services.AppliedCodeBlockManager
 import dev.sweep.assistant.services.PromptBarService
 import dev.sweep.assistant.services.SweepNonProjectFilesService
 import dev.sweep.assistant.theme.SweepColors
-import dev.sweep.assistant.utils.AutoComponentListener
-import dev.sweep.assistant.utils.DocumentChangeListenerAdapter
-import dev.sweep.assistant.utils.GlowingTextPanel
-import dev.sweep.assistant.utils.Pulser
-import dev.sweep.assistant.utils.SweepConstants
-import dev.sweep.assistant.utils.brighter
-import dev.sweep.assistant.utils.darker
-import dev.sweep.assistant.utils.getConnection
-import dev.sweep.assistant.utils.getKeyStrokesForAction
-import dev.sweep.assistant.utils.isIDEDarkMode
-import dev.sweep.assistant.utils.readFile
-import dev.sweep.assistant.utils.relativePath
-import dev.sweep.assistant.views.AppliedCodeBlock
-import dev.sweep.assistant.views.EditorComponentInlaysManager
-import dev.sweep.assistant.views.Hoverable
-import dev.sweep.assistant.views.RoundedComboBox
-import dev.sweep.assistant.views.RoundedTextArea
-import dev.sweep.assistant.views.SendButtonFactory
-import dev.sweep.assistant.views.StreamCodeBlock
+import dev.sweep.assistant.utils.*
+import dev.sweep.assistant.views.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.awt.*
-import java.awt.event.ActionEvent
-import java.awt.event.ComponentAdapter
-import java.awt.event.ComponentEvent
-import java.awt.event.ComponentListener
-import java.awt.event.InputEvent
-import java.awt.event.KeyEvent
+import java.awt.event.*
 import java.beans.PropertyChangeListener
 import javax.swing.*
 
@@ -190,7 +165,9 @@ class PromptBarPanel(
             font = font.deriveFont(font.size2D * 0.8f)
             preferredSize = Dimension(120, 20)
             foreground =
-                if (isIDEDarkMode()) SweepColors.sendButtonColorForeground.darker(1) else SweepColors.sendButtonColorForeground.brighter(12)
+                if (isIDEDarkMode()) SweepColors.sendButtonColorForeground.darker(1) else SweepColors.sendButtonColorForeground.brighter(
+                    12
+                )
             toolTipText = "Select edit mode"
             secondaryText = if (SystemInfo.isMac) "⌘⇧⏎" else "Ctrl⇧⏎"
             // Set up options and selection
@@ -306,7 +283,8 @@ class PromptBarPanel(
                 isEnabled = false
             }
 
-    private val barAdditionalHeight = 20 // The PromptBarPanel will be the size of the input field plus BAR_ADDITIONAL_HEIGHT
+    private val barAdditionalHeight =
+        20 // The PromptBarPanel will be the size of the input field plus BAR_ADDITIONAL_HEIGHT
     private val defaultModel = "gpt-4.1"
     private val popUpVerticalMargin = 10 // Margin between popup and the text above and below it
     private val viewportRightPadding = 10 // Margin between popup the right side of viewport
@@ -507,8 +485,8 @@ class PromptBarPanel(
                 // move the end back by 1 to avoid overflowing into the next line visually.
                 val endIsAtLineStart =
                     highlightEnd > 0 &&
-                        highlightEnd == document.getLineStartOffset(document.getLineNumber(highlightEnd)) &&
-                        highlightEnd > highlightStart
+                            highlightEnd == document.getLineStartOffset(document.getLineNumber(highlightEnd)) &&
+                            highlightEnd > highlightStart
                 if (endIsAtLineStart) {
                     highlightEnd -= 1
                 }
@@ -642,7 +620,8 @@ class PromptBarPanel(
             object : AbstractAction() {
                 override fun actionPerformed(e: ActionEvent?) {
                     if (!isOutputFinished() && !hasRequestBeenSent) {
-                        currentEditMode = if (currentEditMode == EditMode.INLINE) EditMode.FULL_FILE else EditMode.INLINE
+                        currentEditMode =
+                            if (currentEditMode == EditMode.INLINE) EditMode.FULL_FILE else EditMode.INLINE
                         editModeDropdown.selectedItem = currentEditMode.displayName
                         updateModeBasedBehavior()
                     }
@@ -657,19 +636,20 @@ class PromptBarPanel(
                     if (isVisible && e.id == KeyEvent.KEY_PRESSED) {
                         when {
                             e.keyCode == KeyEvent.VK_Y &&
-                                ((SystemInfo.isMac && e.isMetaDown) || (!SystemInfo.isMac && e.isControlDown)) &&
-                                !e.isShiftDown &&
-                                !e.isAltDown -> {
+                                    ((SystemInfo.isMac && e.isMetaDown) || (!SystemInfo.isMac && e.isControlDown)) &&
+                                    !e.isShiftDown &&
+                                    !e.isAltDown -> {
                                 if (isOutputFinished()) {
                                     acceptInstruction()
                                     e.consume()
                                     return@KeyEventDispatcher true
                                 }
                             }
+
                             e.keyCode == KeyEvent.VK_N &&
-                                ((SystemInfo.isMac && e.isMetaDown) || (!SystemInfo.isMac && e.isControlDown)) &&
-                                !e.isShiftDown &&
-                                !e.isAltDown -> {
+                                    ((SystemInfo.isMac && e.isMetaDown) || (!SystemInfo.isMac && e.isControlDown)) &&
+                                    !e.isShiftDown &&
+                                    !e.isAltDown -> {
                                 if (isOutputFinished()) {
                                     rejectInstruction()
                                     e.consume()
@@ -910,6 +890,7 @@ class PromptBarPanel(
                         val adjustedY = point.y - scrollOffset
                         adjustedY + if (lineNumber >= 0) (editor.lineHeight + popUpVerticalMargin) else -popUpVerticalMargin
                     }
+
                     EditMode.FULL_FILE -> {
                         // Position at center of viewport
                         viewportBounds.height - preferredSize.height - viewportFullFileBottomPadding
@@ -1001,7 +982,8 @@ class PromptBarPanel(
 //            val embeddedFilePanelHeight = if (embeddedFilePanel.isVisible) embeddedFilePanel.preferredSize.height else 0
             val embeddedFilePanelHeight = 0
             val inputFieldHeight = inputField.preferredSize.height.coerceAtMost(120) // Limit input field height
-            val centerPanelHeight = (filesInContextHeight + embeddedFilePanelHeight + inputFieldHeight).coerceAtLeast(60).coerceAtMost(350)
+            val centerPanelHeight =
+                (filesInContextHeight + embeddedFilePanelHeight + inputFieldHeight).coerceAtLeast(60).coerceAtMost(350)
 
             // Calculate additional height based on current panel state
             // Since action buttons are now inline with input field, we need less additional height
@@ -1027,6 +1009,7 @@ class PromptBarPanel(
                         // For full file mode, use viewport width with padding on both sides
                         minOf(maxWidth, viewportWidth - 2 * viewportRightPadding)
                     }
+
                     EditMode.INLINE -> {
                         // For inline mode, take into account the left margin
                         minOf(maxWidth, viewportWidth - getLeftMargin() - viewportRightPadding)
@@ -1163,6 +1146,7 @@ class PromptBarPanel(
                     val adjustedY = point.y - scrollOffset
                     adjustedY + if (lineNumber >= 0) (editor.lineHeight + popUpVerticalMargin) else -popUpVerticalMargin
                 }
+
                 EditMode.FULL_FILE -> {
                     viewportBounds.height - preferredSize.height - viewportFullFileBottomPadding
                 }
@@ -1239,7 +1223,8 @@ class PromptBarPanel(
 //                        } else {
 //                            MessagesComponent.getInstance(project).acceptAllCodeBlocksForCurrentFile(disposePromptBar = false)
 //                        }
-                        AppliedCodeBlockManager.getInstance(project).rejectAllBlocksForCurrentFile(disposePromptBar = false)
+                        AppliedCodeBlockManager.getInstance(project)
+                            .rejectAllBlocksForCurrentFile(disposePromptBar = false)
                         // After rejection is complete, start the new request
                         CoroutineScope(Dispatchers.Main).launch {
                             when (currentEditMode) {
@@ -1275,7 +1260,8 @@ class PromptBarPanel(
         val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return
         val document = editor.document
         val fileEditorManager = FileEditorManager.getInstance(project)
-        val fileEditors = fileEditorManager.getEditors(editor.virtualFile)
+        val virtualFile = editor.virtualFile ?: return
+        val fileEditors = fileEditorManager.getEditors(virtualFile)
         val globalEditor = fileEditorManager.selectedTextEditor ?: throw Exception("No files opened.")
         val fileEditor = fileEditors.filterIsInstance<TextEditor>().firstOrNull() ?: return
         var requestSuccess = false
@@ -1308,14 +1294,18 @@ class PromptBarPanel(
                                 // Handle @problems - get severe problems for current file
                                 "${fileInfo.name}:\n${fileInfo.codeSnippet ?: "No problems found"}"
                             }
+
                             fileInfo.codeSnippet != null -> {
                                 // File snippet with content
                                 "${fileInfo.name} (${fileInfo.relativePath}):\n${fileInfo.codeSnippet}"
                             }
+
                             else -> {
                                 // Full file - read content
                                 val content =
-                                    if (SweepNonProjectFilesService.getInstance(project).isAllowedFile(fileInfo.relativePath)) {
+                                    if (SweepNonProjectFilesService.getInstance(project)
+                                            .isAllowedFile(fileInfo.relativePath)
+                                    ) {
                                         SweepNonProjectFilesService
                                             .getInstance(
                                                 project,
@@ -1340,7 +1330,9 @@ class PromptBarPanel(
 
                 // parse entireFileContent to insert a <cursor> token in where selectionstart is
                 val entireFileContentWithCursor =
-                    entireFileContent?.substring(0, selectionStart) + "\n<cursor>\n" + entireFileContent?.substring(selectionStart)
+                    entireFileContent?.substring(0, selectionStart) + "\n<cursor>\n" + entireFileContent?.substring(
+                        selectionStart
+                    )
 
                 val cmdkRequest =
                     CmdKRequest(
@@ -1510,7 +1502,8 @@ class PromptBarPanel(
     private suspend fun startCmdKFullFile(promptText: String) {
         val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return
         val fileEditorManager = FileEditorManager.getInstance(project)
-        val fileEditors = fileEditorManager.getEditors(editor.virtualFile)
+        val virtualFile = editor.virtualFile ?: return
+        val fileEditors = fileEditorManager.getEditors(virtualFile)
         val globalEditor = fileEditorManager.selectedTextEditor ?: throw Exception("No files opened.")
         val fileEditor = fileEditors.filterIsInstance<TextEditor>().firstOrNull() ?: return
         var requestSuccess = false
@@ -1545,14 +1538,18 @@ class PromptBarPanel(
                                 // Handle @problems - get severe problems for current file
                                 "${fileInfo.name}:\n${fileInfo.codeSnippet ?: "No problems found"}"
                             }
+
                             fileInfo.codeSnippet != null -> {
                                 // File snippet with content
                                 "${fileInfo.name} (${fileInfo.relativePath}):\n${fileInfo.codeSnippet}"
                             }
+
                             else -> {
                                 // Full file - read content
                                 val content =
-                                    if (SweepNonProjectFilesService.getInstance(project).isAllowedFile(fileInfo.relativePath)) {
+                                    if (SweepNonProjectFilesService.getInstance(project)
+                                            .isAllowedFile(fileInfo.relativePath)
+                                    ) {
                                         SweepNonProjectFilesService
                                             .getInstance(
                                                 project,
@@ -1619,7 +1616,8 @@ class PromptBarPanel(
                                 val toolInstance = ToolType.createToolInstance(toolCall.toolName, toolCall.isMcp)
 
                                 if (toolInstance != null && toolCall.toolName == "str_replace") {
-                                    val stringReplaceTool = toolInstance as dev.sweep.assistant.agent.tools.StringReplaceTool
+                                    val stringReplaceTool =
+                                        toolInstance as dev.sweep.assistant.agent.tools.StringReplaceTool
                                     val result =
                                         stringReplaceTool.execute(
                                             toolCall,

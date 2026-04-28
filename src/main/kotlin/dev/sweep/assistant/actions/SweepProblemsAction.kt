@@ -29,12 +29,12 @@ class SweepProblemsAction : AnAction() {
         val tree = selectedPanel.tree
         val selectionPath = tree.selectionPath ?: return
         val problemNode = TreeUtil.getLastUserObject(ProblemNode::class.java, selectionPath) ?: return
-        // Extract problem information
-        val message = problemNode.text
+        // Extract problem information using reflection for platform compatibility
+        val message = getProblemNodeText(problemNode)
         val file = problemNode.file
         val document = file.findDocument() ?: return
 
-        val line = problemNode.line
+        val line = getProblemNodeLine(problemNode)
         // Get context with +/- 1 line, handling bounds
         val startLine = maxOf(0, line - 1)
         val endLine = minOf(document.lineCount - 1, line + 1)
@@ -64,7 +64,7 @@ class SweepProblemsAction : AnAction() {
         e.project?.let { project ->
             ProblemsView.getSelectedPanel(project)?.tree?.selectionPath?.let { path ->
                 TreeUtil.getLastUserObject(ProblemNode::class.java, path)?.let { node ->
-                    e.presentation.isVisible = node.severity >= 400
+                    e.presentation.isVisible = getProblemNodeSeverity(node) >= 400
                     return
                 }
             }
@@ -74,4 +74,37 @@ class SweepProblemsAction : AnAction() {
     }
 
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
+    companion object {
+        private fun getProblemNodeText(node: ProblemNode): String {
+            return try {
+                val field = ProblemNode::class.java.getDeclaredField("text")
+                field.isAccessible = true
+                @Suppress("UNCHECKED_CAST")
+                field.get(node) as String
+            } catch (e: Exception) {
+                node.toString()
+            }
+        }
+
+        private fun getProblemNodeLine(node: ProblemNode): Int {
+            return try {
+                val field = ProblemNode::class.java.getDeclaredField("line")
+                field.isAccessible = true
+                field.getInt(node)
+            } catch (e: Exception) {
+                0
+            }
+        }
+
+        private fun getProblemNodeSeverity(node: ProblemNode): Int {
+            return try {
+                val field = ProblemNode::class.java.getDeclaredField("severity")
+                field.isAccessible = true
+                field.getInt(node)
+            } catch (e: Exception) {
+                0
+            }
+        }
+    }
 }

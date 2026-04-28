@@ -5,6 +5,4 @@ pluginManagement {
     }
 }
 
-rootProject.name = "jetbrains"
-
-include("untitled")
+rootProject.name = "sweep-jetbrains"

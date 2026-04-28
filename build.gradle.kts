@@ -5,10 +5,10 @@ import org.jetbrains.intellij.platform.gradle.models.ProductRelease
 
 plugins {
     id("java")
-    id("org.jetbrains.intellij.platform") version "2.2.0"
-    kotlin("jvm") version "2.1.0"
+    id("org.jetbrains.intellij.platform") version "2.15.0"
+    kotlin("jvm") version "2.3.21"
     id("com.google.protobuf") version "0.9.4"
-    kotlin("plugin.serialization") version "1.9.20"
+    kotlin("plugin.serialization") version "2.3.21"
 }
 
 val remoteRobotVersion = "0.11.20"
@@ -16,7 +16,7 @@ val pluginId = "dev.sweep.assistant"
 val pluginName = "Self-Hosted Enterprise Updater"
 println("Building plugin: $pluginName with ID: $pluginId")
 group = "dev.sweep"
-version = "1.29.3"
+version = "1.29.6"
 
 repositories {
     mavenCentral()
@@ -39,14 +39,8 @@ intellijPlatform {
                 types.set(listOf(IntelliJPlatformType.WebStorm))
                 channels.set(listOf(ProductRelease.Channel.RELEASE))
                 sinceBuild.set("242")
-                untilBuild.set("243.*")
+                untilBuild.set("261.*")
             }
-//            select {
-//                types.set(listOf(IntelliJPlatformType.DataGrip))
-//                channels.set(listOf(ProductRelease.Channel.RELEASE))
-//                sinceBuild.set("241") // 23x doesn't support vcs
-//                untilBuild.set("243.*")
-//            }
             select {
                 types.set(
                     listOf(
@@ -65,26 +59,47 @@ intellijPlatform {
                 )
                 channels.set(listOf(ProductRelease.Channel.RELEASE))
                 sinceBuild.set("241")
-                untilBuild.set("253.*")
+                untilBuild.set("263.*")
+            }
+            select {
+                types.set(
+                    listOf(
+                        IntelliJPlatformType.IntellijIdeaUltimate,
+                        IntelliJPlatformType.IntellijIdeaCommunity,
+                        IntelliJPlatformType.GoLand,
+                        IntelliJPlatformType.PyCharmCommunity,
+                        IntelliJPlatformType.PyCharmProfessional,
+                        IntelliJPlatformType.CLion,
+                        IntelliJPlatformType.Rider,
+                        IntelliJPlatformType.RustRover,
+                        IntelliJPlatformType.RubyMine,
+                        IntelliJPlatformType.PhpStorm,
+                    ),
+                )
+                channels.set(listOf(ProductRelease.Channel.RELEASE))
+                sinceBuild.set("261")
+                untilBuild.set("263.*")
             }
         }
     }
 }
 
 tasks {
-    // Need JDK 17 for Intellij 2024.1.7
+    // Need JDK 21 for Intellij 2026.1
 
     withType<JavaCompile> {
-        sourceCompatibility = "17"
-        targetCompatibility = "17"
+        sourceCompatibility = "21"
+        targetCompatibility = "21"
     }
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-        kotlinOptions.jvmTarget = "17"
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        }
     }
 
     patchPluginXml {
         sinceBuild.set("241")
-        untilBuild.set("253.*")
+        untilBuild.set("263.*")
     }
 
     signPlugin {
@@ -113,7 +128,7 @@ tasks {
     }
 
     // Fix: Create a Copy task instead of DefaultTask for configuration cache compatibility
-    val copyRipgrepToSandbox by creating(Copy::class) {
+    val copyRipgrepToSandbox = register<Copy>("copyRipgrepToSandbox") {
         val sandboxPluginDir =
             layout.buildDirectory
                 .dir("idea-sandbox/plugins/${project.name}")
@@ -156,31 +171,31 @@ tasks {
         )
     }
 
-    task<Exec>("e2e") {
+    register<Exec>("e2e") {
         commandLine("./bin/e2e")
     }
 
-    task<Exec>("format") {
+    register<Exec>("format") {
         group = "format"
         commandLine("./bin/format")
     }
 
-    task<Exec>("release") {
+    register<Exec>("release") {
         group = "plugin"
         commandLine("./bin/release")
     }
 
-    task<Exec>("installPlugin") {
+    register<Exec>("installPlugin") {
         group = "plugin"
         commandLine("./bin/install")
     }
 
-    task<Exec>("installCloudPlugin") {
+    register<Exec>("installCloudPlugin") {
         group = "plugin"
         commandLine("./bin/install", "--cloud")
     }
 
-    task<Exec>("uninstallPlugin") {
+    register<Exec>("uninstallPlugin") {
         group = "plugin"
         commandLine("./bin/uninstall")
     }
@@ -254,7 +269,7 @@ dependencies {
         // https://www.jetbrains.com/idea/download/other.html
 //        androidStudio("2024.3.2.11") // Android Studio Meerkat | 2024.3.2 Patch 11
 //        androidStudio("2025.1.1.11") // Android Studio Narwhal | 2025.1.1 Patch 11
-        intellijIdeaCommunity("2025.1")
+        intellijIdea("2026.1")
 //        rustRover("2025.1")
 //        intellijIdeaCommunity("2023.3.8")
 //        intellijIdeaCommunity("2023.1.7")

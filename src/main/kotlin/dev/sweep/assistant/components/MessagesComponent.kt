@@ -27,13 +27,7 @@ import dev.sweep.assistant.data.Annotations
 import dev.sweep.assistant.data.Message
 import dev.sweep.assistant.data.MessageRole
 import dev.sweep.assistant.data.distinctFileInfos
-import dev.sweep.assistant.services.AppliedCodeBlockManager
-import dev.sweep.assistant.services.ChatHistory
-import dev.sweep.assistant.services.FeatureFlagService
-import dev.sweep.assistant.services.MessageList
-import dev.sweep.assistant.services.StreamStateService
-import dev.sweep.assistant.services.SweepColorChangeService
-import dev.sweep.assistant.services.SweepSessionManager
+import dev.sweep.assistant.services.*
 import dev.sweep.assistant.tracking.EventType
 import dev.sweep.assistant.tracking.TelemetryService
 import dev.sweep.assistant.utils.*
@@ -47,7 +41,6 @@ import java.awt.Dimension
 import java.awt.event.ActionEvent
 import java.awt.event.KeyEvent
 import javax.swing.*
-import javax.swing.JLayer
 import javax.swing.JPanel.WHEN_IN_FOCUSED_WINDOW
 import javax.swing.event.ChangeListener
 import kotlin.math.max
@@ -213,7 +206,8 @@ class MessagesComponent(
                     }
 
                 val availableHeight = autoScrollingChatPanel.component.height
-                val postChatBarHeight = if (postChatBar.component.isVisible) postChatBar.component.preferredSize.height else 0
+                val postChatBarHeight =
+                    if (postChatBar.component.isVisible) postChatBar.component.preferredSize.height else 0
                 val usedHeight =
                     if (lastUserMessageIndex >= 0) {
                         messagesPanel.components
@@ -496,8 +490,8 @@ class MessagesComponent(
                                 currentMentions
                                     .find { currentFile ->
                                         currentFile.relativePath == updatedFile.relativePath &&
-                                            currentFile.span == updatedFile.span &&
-                                            currentFile.codeSnippet == updatedFile.codeSnippet
+                                                currentFile.span == updatedFile.span &&
+                                                currentFile.codeSnippet == updatedFile.codeSnippet
                                     }?.let { matchingFile ->
                                         // If found, copy the existing score
                                         updatedFile.copy(score = matchingFile.score)
@@ -645,7 +639,7 @@ class MessagesComponent(
             // Some nested UI builders access PSI/documents and may require WriteIntentReadAction
             // Use write-intent read action to satisfy both PSI reads and nested editor creation
             val real: JComponent =
-                WriteIntentReadAction.compute<JComponent, RuntimeException> {
+                WriteIntentReadAction.compute<JComponent> {
                     createComponent(
                         message = latestMessage,
                         index = messageIndex,
@@ -914,6 +908,7 @@ class MessagesComponent(
             UpdateType.REWRITE_MESSAGE, UpdateType.NEW_MESSAGE, UpdateType.CHANGE_CHAT -> {
                 sessionMessageList?.regenerateUniqueChatID() ?: messageListService.regenerateUniqueChatID()
             }
+
             UpdateType.CONTINUE_AGENT -> {
                 // Keep the same uniqueChatID for CONTINUE_AGENT
             }
@@ -1086,7 +1081,8 @@ class MessagesComponent(
                     explanationBlockDisplay?.let { display ->
                         ApplicationManager.getApplication().executeOnPooledThread {
                             val stream = Stream.getNewInstance(project, effectiveConversationId)
-                            StreamStateService.getInstance(project).notify(false, false, true, effectiveConversationId) // streamStarted = true
+                            StreamStateService.getInstance(project)
+                                .notify(false, false, true, effectiveConversationId) // streamStarted = true
                             runBlocking {
                                 stream.start(
                                     display,
@@ -1112,7 +1108,8 @@ class MessagesComponent(
 
                                                     // Naively increment the *thread total* cost whenever we receive new token usage.
                                                     // This intentionally counts retries/edits too.
-                                                    val existingTokenUsage = messages.getOrNull(index)?.annotations?.tokenUsage
+                                                    val existingTokenUsage =
+                                                        messages.getOrNull(index)?.annotations?.tokenUsage
                                                     val incomingTokenUsage = message.annotations?.tokenUsage
                                                     if (incomingTokenUsage != null && incomingTokenUsage.costWithMarkupCents > 0.0) {
                                                         val prevCost = existingTokenUsage?.costWithMarkupCents ?: 0.0
@@ -1130,9 +1127,9 @@ class MessagesComponent(
                                                         // Merge completedToolCalls by toolCallId to preserve drain-appended calls
                                                         val mergedCompleted =
                                                             (
-                                                                currentAnn.completedToolCalls +
-                                                                    incomingAnn.completedToolCalls
-                                                            ).distinctBy { it.toolCallId }.toMutableList()
+                                                                    currentAnn.completedToolCalls +
+                                                                            incomingAnn.completedToolCalls
+                                                                    ).distinctBy { it.toolCallId }.toMutableList()
 
                                                         current.copy(
                                                             content = incoming.content,
@@ -1148,7 +1145,9 @@ class MessagesComponent(
                                                                         run {
                                                                             val byId =
                                                                                 LinkedHashMap<String, dev.sweep.assistant.data.ToolCall>()
-                                                                            currentAnn.toolCalls.forEach { byId[it.toolCallId] = it }
+                                                                            currentAnn.toolCalls.forEach {
+                                                                                byId[it.toolCallId] = it
+                                                                            }
                                                                             incomingAnn.toolCalls.forEach { update ->
                                                                                 val existing = byId[update.toolCallId]
                                                                                 val merged =
@@ -1180,16 +1179,23 @@ class MessagesComponent(
                                                                     stopStreaming = incomingAnn.stopStreaming,
                                                                     actionPlan = incomingAnn.actionPlan,
                                                                     cursorLineNumber =
-                                                                        incomingAnn.cursorLineNumber ?: currentAnn.cursorLineNumber,
+                                                                        incomingAnn.cursorLineNumber
+                                                                            ?: currentAnn.cursorLineNumber,
                                                                     cursorLineContent =
-                                                                        incomingAnn.cursorLineContent ?: currentAnn.cursorLineContent,
+                                                                        incomingAnn.cursorLineContent
+                                                                            ?: currentAnn.cursorLineContent,
                                                                     currentFilePath =
-                                                                        incomingAnn.currentFilePath ?: currentAnn.currentFilePath,
+                                                                        incomingAnn.currentFilePath
+                                                                            ?: currentAnn.currentFilePath,
                                                                     filesToLastDiffs =
-                                                                        incomingAnn.filesToLastDiffs ?: currentAnn.filesToLastDiffs,
-                                                                    mentionedFiles = incomingAnn.mentionedFiles ?: currentAnn.mentionedFiles,
-                                                                    tokenUsage = incomingAnn.tokenUsage ?: currentAnn.tokenUsage,
-                                                                    completionTime = incomingAnn.completionTime ?: currentAnn.completionTime,
+                                                                        incomingAnn.filesToLastDiffs
+                                                                            ?: currentAnn.filesToLastDiffs,
+                                                                    mentionedFiles = incomingAnn.mentionedFiles
+                                                                        ?: currentAnn.mentionedFiles,
+                                                                    tokenUsage = incomingAnn.tokenUsage
+                                                                        ?: currentAnn.tokenUsage,
+                                                                    completionTime = incomingAnn.completionTime
+                                                                        ?: currentAnn.completionTime,
                                                                 ),
                                                         )
                                                     }
@@ -1226,11 +1232,17 @@ class MessagesComponent(
 
                                                 // Bypass throttling when tool calls are present to ensure they're visible in the UI
                                                 // Also bypass for final message (stopStreaming == "stop") to ensure last chunk renders
-                                                val hasToolCalls = mergedMessage.annotations?.toolCalls?.isNotEmpty() == true
+                                                val hasToolCalls =
+                                                    mergedMessage.annotations?.toolCalls?.isNotEmpty() == true
                                                 val isFinalMessage = mergedMessage.annotations?.stopStreaming == "stop"
-                                                val shouldUpdate = hasToolCalls || isFinalMessage || (now - lastUpdate >= throttleDelay)
+                                                val shouldUpdate =
+                                                    hasToolCalls || isFinalMessage || (now - lastUpdate >= throttleDelay)
 
-                                                if (shouldUpdate && stream.compareAndSetLastUiUpdateTime(lastUpdate, now)) {
+                                                if (shouldUpdate && stream.compareAndSetLastUiUpdateTime(
+                                                        lastUpdate,
+                                                        now
+                                                    )
+                                                ) {
                                                     ApplicationManager.getApplication().invokeLater {
                                                         if (project.isDisposed) return@invokeLater
 
@@ -1244,7 +1256,8 @@ class MessagesComponent(
                                                         val targetIndex = sessionMessages?.size()?.minus(1) ?: -1
 
                                                         if (targetIndex >= 0) {
-                                                            val panel = MessagesComponent.getInstance(project).messagesPanel
+                                                            val panel =
+                                                                MessagesComponent.getInstance(project).messagesPanel
                                                             val atIndex = panel.components.getOrNull(targetIndex)
                                                             val markdownDisplay =
                                                                 when (atIndex) {
@@ -1254,7 +1267,8 @@ class MessagesComponent(
                                                                 }
 
                                                             // Always prefer the freshest message from the session list.
-                                                            val freshMessage = sessionMessages?.getOrNull(targetIndex) ?: mergedMessage
+                                                            val freshMessage =
+                                                                sessionMessages?.getOrNull(targetIndex) ?: mergedMessage
                                                             markdownDisplay?.updateMessage(freshMessage)
                                                         }
                                                     }

@@ -28,6 +28,7 @@ import com.intellij.openapi.fileEditor.TextEditor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.util.concurrency.AppExecutorUtil
 import com.intellij.util.concurrency.annotations.RequiresBackgroundThread
 import com.intellij.util.concurrency.annotations.RequiresBlockingContext
 import com.intellij.util.concurrency.annotations.RequiresReadLockAbsence
@@ -53,6 +54,7 @@ import java.util.*
 import java.util.Queue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.TimeUnit
 import javax.swing.SwingUtilities
 import kotlin.math.abs
 
@@ -1151,85 +1153,90 @@ class RecentEditsTracker(
     }
 
     init {
-        SweepSettings.getInstance().runNowAndOnSettingsChange(project, this) {
-            if (nextEditPredictionFlagOn &&
-                editorFactoryListener == null &&
-                SweepConstants.GATEWAY_MODE != SweepConstants.GatewayMode.HOST
-            ) {
-                // NEW: Setup editor factory listener
-                setupEditorFactoryListener()
-
-                // Ensure application-level editor actions router is initialized once
-                EditorActionsRouterService.getInstance()
-
-                // Initialize for currently open editors
-                // Get all already-open editors for this project
-                val allEditors =
-                    EditorFactory
-                        .getInstance()
-                        .allEditors
-                        .filter { it.project == project }
-
-                // Add focus listeners to all already-open editors
-                // This is needed because EditorFactoryListener only catches NEW editors
-                // created after it's registered, so we need to manually handle editors
-                // that were already open when the IDE restarted
-                allEditors.forEach { editor ->
-                    // Filter out non-code editors (consoles, diffs, previews)
-                    if (editor.editorKind != EditorKind.MAIN_EDITOR) return@forEach
-
-                    // Ensure editor has a valid file
-                    if (getVirtualFileFromEditor(editor) == null) return@forEach
-
-                    val focusListener =
-                        object : FocusListener {
-                            override fun focusGained(e: FocusEvent?) {
-                                handleEditorFocusGained(editor)
-                            }
-
-                            override fun focusLost(e: FocusEvent?) {
-                                handleEditorFocusLost(editor)
-                            }
-                        }
-
-                    editor.contentComponent.addFocusListener(focusListener)
-                    editorFocusListeners[editor] = focusListener
-
-                    logger.debug("Added focus listener to already-open editor: ${getVirtualFileFromEditor(editor)?.path}")
+        logger.info("[RecentEditsTracker.init] START | project=${project.name} thread=${Thread.currentThread().name} isEdt=${ApplicationManager.getApplication().isDispatchThread}")
+        AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            if (isDisposed || project.isDisposed) return@schedule
+            try {
+                val settings = SweepSettings.getInstance()
+                ApplicationManager.getApplication().invokeLater {
+                    if (isDisposed || project.isDisposed) return@invokeLater
+                    logger.info("[RecentEditsTracker.init] Registering settings listener on thread=${Thread.currentThread().name}")
+                    settings.runNowAndOnSettingsChange(project, this) {
+                        applyAutocompleteSettings()
+                    }
                 }
-
-                // Attach document/caret listeners to the currently focused editor
-                getCurrentEditor()?.let { editor ->
-                    attachListenerToEditor(editor)
-                    lastFocusedEditor = editor
-                }
-
-                // Initialize lookup UI customizer
-                lookupUICustomizer = LookupUICustomizer(project)
-                lookupUICustomizer?.initialize()
-
-                // Setup command listener for undo/redo detection
-                setupCommandListener()
-
-                launchAutocompleteConsumerWorker()
-            } else if (!nextEditPredictionFlagOn && editorFactoryListener != null) {
-                // Cleanup
-                cleanupFocusTracking()
-                consumerJob?.cancel()
-                consumerJob = null
+            } catch (e: Throwable) {
+                logger.warn("[RecentEditsTracker.init] Failed to register settings listener: ${e.message}", e)
             }
-
-            if (SweepConstants.GATEWAY_MODE == SweepConstants.GatewayMode.HOST) {
-                EditorActionsRouterService.getInstance()
-                cleanupFocusTracking()
-                consumerJob?.cancel()
-                consumerJob = null
-            }
-        }
+        }, 3, TimeUnit.SECONDS)
+        logger.info("[RecentEditsTracker.init] END - settings listener deferred")
 
         scope.launch {
             clientIp = getPublicIPAddress()
         }
+    }
+
+    private fun SweepSettings.applyAutocompleteSettings() {
+        logger.info("[RecentEditsTracker.applyAutocompleteSettings] START | enabled=$nextEditPredictionFlagOn gateway=${SweepConstants.GATEWAY_MODE} thread=${Thread.currentThread().name}")
+        if (nextEditPredictionFlagOn &&
+            editorFactoryListener == null &&
+            SweepConstants.GATEWAY_MODE != SweepConstants.GatewayMode.HOST
+        ) {
+            setupEditorFactoryListener()
+
+            EditorActionsRouterService.getInstance()
+
+            val allEditors =
+                EditorFactory
+                    .getInstance()
+                    .allEditors
+                    .filter { it.project == project }
+
+            allEditors.forEach { editor ->
+                if (editor.editorKind != EditorKind.MAIN_EDITOR) return@forEach
+                if (getVirtualFileFromEditor(editor) == null) return@forEach
+
+                val focusListener =
+                    object : FocusListener {
+                        override fun focusGained(e: FocusEvent?) {
+                            handleEditorFocusGained(editor)
+                        }
+
+                        override fun focusLost(e: FocusEvent?) {
+                            handleEditorFocusLost(editor)
+                        }
+                    }
+
+                editor.contentComponent.addFocusListener(focusListener)
+                editorFocusListeners[editor] = focusListener
+
+                logger.debug("Added focus listener to already-open editor: ${getVirtualFileFromEditor(editor)?.path}")
+            }
+
+            getCurrentEditor()?.let { editor ->
+                attachListenerToEditor(editor)
+                lastFocusedEditor = editor
+            }
+
+            lookupUICustomizer = LookupUICustomizer(project)
+            lookupUICustomizer?.initialize()
+
+            setupCommandListener()
+
+            launchAutocompleteConsumerWorker()
+        } else if (!nextEditPredictionFlagOn && editorFactoryListener != null) {
+            cleanupFocusTracking()
+            consumerJob?.cancel()
+            consumerJob = null
+        }
+
+        if (SweepConstants.GATEWAY_MODE == SweepConstants.GatewayMode.HOST) {
+            EditorActionsRouterService.getInstance()
+            cleanupFocusTracking()
+            consumerJob?.cancel()
+            consumerJob = null
+        }
+        logger.info("[RecentEditsTracker.applyAutocompleteSettings] END")
     }
 
     /**

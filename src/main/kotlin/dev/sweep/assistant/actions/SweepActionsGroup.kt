@@ -1,6 +1,7 @@
 package dev.sweep.assistant.actions
 
 import com.intellij.openapi.actionSystem.*
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.util.IconLoader
 import dev.sweep.assistant.settings.SweepSettings
 import dev.sweep.assistant.utils.SweepConstants
@@ -24,11 +25,14 @@ class SweepActionsGroup : ActionGroup() {
         actions.add(FocusChatAction())
 
         // Ensure default prompts are initialized
-        val sweepSettings = SweepSettings.getInstance()
-        sweepSettings.ensureDefaultPromptsInitialized()
+        val sweepSettings =
+            runCatching {
+                ApplicationManager.getApplication().getServiceIfCreated(SweepSettings::class.java)
+            }.getOrNull()
+        sweepSettings?.ensureDefaultPromptsInitialized()
 
         // Add separator if there are custom prompts
-        if (sweepSettings.customPrompts.isNotEmpty()) {
+        if (sweepSettings?.customPrompts?.isNotEmpty() == true) {
             actions.add(Separator.getInstance())
 
             // Add custom prompt actions dynamically

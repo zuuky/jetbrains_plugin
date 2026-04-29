@@ -5,6 +5,7 @@ import com.intellij.notification.NotificationAction
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
@@ -38,8 +39,9 @@ class SweepMcpService(
         fun getInstance(project: Project): SweepMcpService = project.getService(SweepMcpService::class.java)
 
         // Server connection timeout in milliseconds
-        // Remote OAuth servers (like Notion) need more time for OAuth flow + connection + initialization
-        const val SERVER_CONNECTION_TIMEOUT_MS = 120_000L // 2 minutes for remote servers
+        // Reduced from 120s to 30s to prevent IDE freeze during startup when servers are unreachable.
+        // Remote OAuth servers that need more time should use deferred connection (shouldDeferConnection).
+        const val SERVER_CONNECTION_TIMEOUT_MS = 30_000L // 30 seconds
 
         // Server name validation pattern from Vertex AI API requirements
         val SERVER_NAME_PATTERN = Regex("^[a-zA-Z0-9_-]{1,128}$")
@@ -66,22 +68,32 @@ class SweepMcpService(
     private val debounceDelay = 500L // milliseconds
     private var refreshOnCloseJob: Job? = null
 
+    private val logger = Logger.getInstance(SweepMcpService::class.java)
+
     init {
         // Initialize MCP servers on startup
+        logger.info("[SweepMcpService.init] START | project=${project.name}")
         scope.launch {
-            initializeMCPServers()
-            // Start watching config file for changes
-            initializeConfigFileWatcher()
-            initializeFileEditorWatcher()
+            try {
+                initializeMCPServers()
+                // Start watching config file for changes
+                initializeConfigFileWatcher()
+                initializeFileEditorWatcher()
+            } catch (e: Exception) {
+                logger.warn("[SweepMcpService.init] Failed during initialization: ${e.message}", e)
+            }
+            logger.info("[SweepMcpService.init] END")
         }
     }
 
     private suspend fun initializeMCPServers() {
         try {
+            logger.info("[SweepMcpService.initializeMCPServers] START")
             val configPath = getMcpConfigPath()
             val virtualFile = LocalFileSystem.getInstance().findFileByPath(configPath)
 
             if (virtualFile?.exists() != true) {
+                logger.info("[SweepMcpService.initializeMCPServers] No config file found at $configPath, skipping")
                 return
             }
 
@@ -92,6 +104,7 @@ class SweepMcpService(
             lastConfigContent = contents // Store the initial config content
 
             val config = objectMapper.readValue(contents, MCPServersConfig::class.java)
+            logger.info("[SweepMcpService.initializeMCPServers] Found ${config.mcpServers.size} servers in config")
 
             config.mcpServers.forEach { (serverName, serverConfig) ->
                 // Validate server name
@@ -126,10 +139,13 @@ class SweepMcpService(
                 }
 
                 try {
+                    logger.info("[SweepMcpService.initializeMCPServers] Connecting to server '$serverName' with timeout=${SERVER_CONNECTION_TIMEOUT_MS}ms")
                     withTimeout(SERVER_CONNECTION_TIMEOUT_MS) {
                         sweepMcpClientManager.addServer(serverName, serverConfig, project)
                     }
+                    logger.info("[SweepMcpService.initializeMCPServers] Successfully connected to server '$serverName'")
                 } catch (e: TimeoutCancellationException) {
+                    logger.warn("[SweepMcpService.initializeMCPServers] Timeout connecting to server '$serverName' after ${SERVER_CONNECTION_TIMEOUT_MS / 1000}s")
                     // Add the server with failed status
                     sweepMcpClientManager.addFailedServer(
                         serverName,
@@ -137,12 +153,13 @@ class SweepMcpService(
                         project,
                     )
                 } catch (e: Exception) {
-                    println("Failed to add server $serverName: ${e.message}")
+                    logger.warn("[SweepMcpService.initializeMCPServers] Failed to add server $serverName: ${e.message}")
                 }
             }
         } catch (e: Exception) {
-            println("Failed to initialize MCP servers: ${e.message}")
+            logger.warn("[SweepMcpService.initializeMCPServers] Failed to initialize MCP servers: ${e.message}", e)
         }
+        logger.info("[SweepMcpService.initializeMCPServers] END")
     }
 
     /**

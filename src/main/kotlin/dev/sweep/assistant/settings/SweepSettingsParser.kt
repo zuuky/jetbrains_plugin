@@ -37,7 +37,7 @@ object SweepSettingsParser {
         defaultValue: String = "",
     ): String = environmentValues[key] ?: defaultValue
 
-    fun isCloudEnvironment(): Boolean = getValue("ENVIRONMENT", "").lowercase() == "cloud"
+    fun isCloudEnvironment(): Boolean = false
 
     fun isDeveloperMode(): Boolean {
         // Check if plugin was installed from disk (not from marketplace)

@@ -1,7 +1,7 @@
 package dev.sweep.assistant.settings
 
 object SweepEnvironmentConstants {
-    val IS_CLOUD_ENVIRONMENT = SweepSettingsParser.isCloudEnvironment()
+    val IS_CLOUD_ENVIRONMENT = false
     val DISABLE_FIM_AUTOCOMPLETE = IS_CLOUD_ENVIRONMENT
     val PLUGIN_ID =
         if (IS_CLOUD_ENVIRONMENT) {

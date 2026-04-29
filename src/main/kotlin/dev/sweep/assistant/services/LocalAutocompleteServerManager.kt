@@ -116,8 +116,14 @@ class LocalAutocompleteServerManager : Disposable {
 
     @Synchronized
     private fun startServer(onStatus: ((String) -> Unit)? = null) {
-        if (isStarting) return
-        if (isServerHealthy()) return
+        if (isStarting) {
+            logger.info("[LocalAutocompleteServerManager.startServer] Already starting, skipping")
+            return
+        }
+        if (isServerHealthy()) {
+            logger.info("[LocalAutocompleteServerManager.startServer] Server is already healthy, skipping")
+            return
+        }
 
         // If remote URL is configured, no local process to start
         if (getConfiguredRemoteUrl() != null) {
@@ -126,6 +132,7 @@ class LocalAutocompleteServerManager : Disposable {
         }
 
         isStarting = true
+        logger.info("[LocalAutocompleteServerManager.startServer] START | thread=${Thread.currentThread().name}")
 
         try {
             onStatus?.invoke("Looking for uvx on PATH...")
@@ -153,6 +160,7 @@ class LocalAutocompleteServerManager : Disposable {
             }
         } finally {
             isStarting = false
+            logger.info("[LocalAutocompleteServerManager.startServer] END")
         }
     }
 
@@ -410,14 +418,24 @@ class LocalAutocompleteServerManager : Disposable {
      * If the server is already healthy, does nothing.
      */
     fun startServerInTerminal(project: Project) {
+        if (project.isDisposed) {
+            logger.info("[LocalAutocompleteServerManager.startServerInTerminal] Project is disposed, skipping")
+            return
+        }
         if (isServerHealthy()) {
-            logger.info("Local autocomplete server is already running")
+            logger.info("[LocalAutocompleteServerManager.startServerInTerminal] Server is already running")
             return
         }
 
-        val command = getServerCommand() ?: return
+        val command = getServerCommand() ?: run {
+            logger.warn("[LocalAutocompleteServerManager.startServerInTerminal] Could not resolve server command")
+            return
+        }
+
+        logger.info("[LocalAutocompleteServerManager.startServerInTerminal] START | command=$command")
 
         ApplicationManager.getApplication().invokeLater {
+            if (project.isDisposed) return@invokeLater
             try {
                 val toolWindow = ToolWindowManager.getInstance(project)
                     .getToolWindow(TerminalToolWindowFactory.TOOL_WINDOW_ID) ?: return@invokeLater

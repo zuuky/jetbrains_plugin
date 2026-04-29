@@ -21,6 +21,7 @@ class VirtualFileSystemWatcher(
     parentDisposable: Disposable,
     private val onEvent: (kind: WatchEvent.Kind<*>, filePath: Path) -> Unit,
 ) : Disposable {
+    private val logger = com.intellij.openapi.diagnostic.Logger.getInstance(VirtualFileSystemWatcher::class.java)
     private val eventQueue = ConcurrentLinkedQueue<Pair<WatchEvent.Kind<*>, Path>>()
     private val eventProcessor =
         Executors.newSingleThreadExecutor { runnable ->
@@ -91,10 +92,15 @@ class VirtualFileSystemWatcher(
     }
 
     fun startWatching() {
-        if (project.isDisposed) return
+        if (project.isDisposed) {
+            logger.info("[VirtualFileSystemWatcher.startWatching] Project is disposed, skipping")
+            return
+        }
 
+        logger.info("[VirtualFileSystemWatcher.startWatching] START | project=${project.name}")
         // Register the async file listener
         VirtualFileManager.getInstance().addAsyncFileListener(fileListener, this)
+        logger.info("[VirtualFileSystemWatcher.startWatching] END")
     }
 
     private fun processEvents(events: List<Pair<VFileEvent, EventType>>) {
@@ -231,15 +237,23 @@ class VirtualFileSystemWatcher(
 
     private fun processQueuedEvents() {
         eventProcessor.execute {
+            var processedCount = 0
             while (!project.isDisposed) {
                 val event = eventQueue.poll() ?: break
                 val (kind, path) = event
 
                 try {
                     onEvent(kind, path)
+                    processedCount++
                 } catch (e: Exception) {
-                    // Log error but continue processing other events
+                    logger.warn(
+                        "[VirtualFileSystemWatcher.processQueuedEvents] Error processing event $kind for $path: ${e.message}",
+                        e
+                    )
                 }
+            }
+            if (processedCount > 0) {
+                logger.info("[VirtualFileSystemWatcher.processQueuedEvents] Processed $processedCount events")
             }
         }
     }

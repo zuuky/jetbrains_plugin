@@ -52,7 +52,12 @@ class VimMotionGhostTextHandler(
     ): Boolean {
         val project = editor.project ?: return false
 
-        if (!IdeaVimIntegrationService.getInstance(project).isIdeaVimActive()) {
+        val vimIntegrationService =
+            runCatching {
+                project.getServiceIfCreated(IdeaVimIntegrationService::class.java)
+            }.getOrNull()
+
+        if (vimIntegrationService?.isIdeaVimActive() != true) {
             return false
         }
 
@@ -87,7 +92,10 @@ class VimMotionGhostTextHandler(
      * Clear any active ghost text suggestion in the editor
      */
     private fun clearGhostTextIfPresent(editor: Editor) {
-        val tracker = RecentEditsTracker.getInstance(editor.project ?: return)
+        val tracker =
+            runCatching {
+                (editor.project ?: return).getServiceIfCreated(RecentEditsTracker::class.java)
+            }.getOrNull() ?: return
 
         tracker.currentSuggestion?.let { suggestion ->
             (suggestion as? AutocompleteSuggestion.GhostTextSuggestion)?.editor?.takeIf { it == editor }?.let {

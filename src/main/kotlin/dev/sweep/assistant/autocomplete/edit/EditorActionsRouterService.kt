@@ -238,8 +238,12 @@ class EditorActionsRouterService : Disposable {
                             val tracker = trackerFor(editor)
 
                             // Special case: Alt-Right (Next word) with acceptWordOnRightArrow setting
+                            val settings =
+                                runCatching {
+                                    ApplicationManager.getApplication().getServiceIfCreated(SweepSettings::class.java)
+                                }.getOrNull()
                             if (actionId == IdeActions.ACTION_EDITOR_NEXT_WORD &&
-                                SweepSettings.getInstance().acceptWordOnRightArrow &&
+                                settings?.acceptWordOnRightArrow == true &&
                                 tracker?.acceptNextWord() == true
                             ) {
                                 return
@@ -388,8 +392,14 @@ class EditorActionsRouterService : Disposable {
     private fun trackerFor(editor: Editor): RecentEditsTracker? {
         val project: Project = editor.project ?: return null
         // Only delegate if the feature is enabled to avoid instantiating trackers unnecessarily
-        return if (SweepSettings.getInstance().nextEditPredictionFlagOn) {
-            RecentEditsTracker.getInstance(project)
+        val settings =
+            runCatching {
+                ApplicationManager.getApplication().getServiceIfCreated(SweepSettings::class.java)
+            }.getOrNull()
+        return if (settings?.nextEditPredictionFlagOn == true) {
+            runCatching {
+                project.getServiceIfCreated(RecentEditsTracker::class.java)
+            }.getOrNull()
         } else {
             null
         }

@@ -1,6 +1,7 @@
 package dev.sweep.assistant.entities
 
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
@@ -8,23 +9,17 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
-import dev.sweep.assistant.components.SweepConfig // Keep for isNoEntitiesCache check
+import dev.sweep.assistant.components.SweepConfig
 import dev.sweep.assistant.data.ProjectFilesCache
-import dev.sweep.assistant.settings.SweepMetaData // Import SweepMetaData
+import dev.sweep.assistant.settings.SweepMetaData
 import dev.sweep.assistant.utils.DatabaseOperationQueue
 import dev.sweep.assistant.utils.getProjectNameHash
 import dev.sweep.assistant.utils.relativePath
 import java.io.File
-import java.sql.Connection
-import java.sql.DriverManager
-import java.sql.PreparedStatement
-import java.sql.ResultSet
-import java.sql.SQLException
+import java.sql.*
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.io.use
-import kotlin.text.get
 
 @Deprecated(
     "Try not to use this class directly anymore. Still used as it will take a while to remove all usages. " +
@@ -69,16 +64,29 @@ class EntitiesCache(
     private var projectFilesCacheRef: ProjectFilesCache? = null
 
     init {
-        // Initialization is now deferred to startPopulatingCache or first DB access
-        logger.info("EntitiesCache service created for project $projectHash. Initialization deferred.")
-        // Add a listener to ProjectFilesCache deletion events
-        // Store the reference so we can use it in dispose() without calling getInstance()
-        projectFilesCacheRef =
-            ProjectFilesCache.getInstance(project).also { cache ->
-                cache.addOnDeleteHandler("EntitiesCache") { filePath ->
-                    removeFileFromCache(filePath)
+        // CRITICAL FIX: Defer all getInstance() calls to background thread to avoid EDT deadlock
+        // during plugin initialization. Calling getInstance() in init block during IDE startup
+        // can cause deadlock because the service container may not be fully initialized.
+        logger.info("[EntitiesCache.init] START | project=$projectHash thread=${Thread.currentThread().name} isEdt=${ApplicationManager.getApplication().isDispatchThread}")
+
+        // Schedule ProjectFilesCache reference setup on background thread
+        ApplicationManager.getApplication().executeOnPooledThread {
+            logger.info("[EntitiesCache.init] Setting up ProjectFilesCache reference on background thread")
+            try {
+                if (!project.isDisposed) {
+                    projectFilesCacheRef =
+                        ProjectFilesCache.getInstance(project).also { cache ->
+                            cache.addOnDeleteHandler("EntitiesCache") { filePath ->
+                                removeFileFromCache(filePath)
+                            }
+                        }
+                    logger.info("[EntitiesCache.init] ProjectFilesCache reference set successfully")
                 }
+            } catch (e: Exception) {
+                logger.warn("[EntitiesCache.init] Failed to add delete handler: ${e.message}", e)
             }
+        }
+        logger.info("[EntitiesCache.init] END - deferred ProjectFilesCache setup")
     }
 
     private fun getStorageFile(): File {

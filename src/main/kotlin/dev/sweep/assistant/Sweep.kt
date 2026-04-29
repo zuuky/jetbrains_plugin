@@ -48,27 +48,32 @@ class Sweep :
         project: Project,
         showToolWindow: Boolean = true,
     ) {
-        // Clear all session and tab state before removing contents.
-        // This is necessary because the contentRemoved listener in TabManager
-        // has an early return when hasBeenSet is false, so sessions wouldn't be
-        // disposed otherwise. Without this, opening conversations from history
-        // after re-logging in would fail (try to switch to non-existent tabs).
-        SweepSessionManager.getInstance(project).clearAllSessions()
-        TabManager.getInstance(project).clearAllTabState()
+        if (project.isDisposed) return
+        try {
+            // Clear all session and tab state before removing contents.
+            // This is necessary because the contentRemoved listener in TabManager
+            // has an early return when hasBeenSet is false, so sessions wouldn't be
+            // disposed otherwise. Without this, opening conversations from history
+            // after re-logging in would fail (try to switch to non-existent tabs).
+            SweepSessionManager.getInstance(project).clearAllSessions()
+            TabManager.getInstance(project).clearAllTabState()
 
-        toolWindow.contentManager.run {
-            removeAllContents(true)
-            addContent(
-                factory.createContent(
-                    WelcomeScreen(project).create(),
-                    "",
-                    false,
-                ),
-            )
-        }
+            toolWindow.contentManager.run {
+                removeAllContents(true)
+                addContent(
+                    factory.createContent(
+                        WelcomeScreen(project).create(),
+                        "",
+                        false,
+                    ),
+                )
+            }
 
-        if (showToolWindow) {
-            toolWindow.show()
+            if (showToolWindow) {
+                toolWindow.show()
+            }
+        } catch (e: Exception) {
+            Logger.getInstance(Sweep::class.java).warn("[Sweep.redirectToSettingsPage] Failed: ${e.message}", e)
         }
     }
 
@@ -104,6 +109,11 @@ class Sweep :
         toolWindow: ToolWindow,
         showToolWindow: Boolean = true,
     ) {
+        if (project.isDisposed) return
+
+        val logger = Logger.getInstance(Sweep::class.java)
+        logger.info("[Sweep.displayChatInterface] START | thread=${Thread.currentThread().name}")
+
         val content =
             toolWindow.contentManager.factory
                 .createContent(
@@ -118,6 +128,7 @@ class Sweep :
                 }
 
         ApplicationManager.getApplication().invokeLater {
+            if (project.isDisposed) return@invokeLater
             try {
                 toolWindow.contentManager.run {
                     // Add new content BEFORE removing old content to prevent contentManager from becoming empty.
@@ -130,7 +141,6 @@ class Sweep :
                 // Retry after 200ms delay on background thread, then schedule back to UI thread
                 ApplicationManager.getApplication().executeOnPooledThread {
                     Thread.sleep(200)
-                    // 添加项目 dispose 检查，避免在项目关闭后执行
                     if (project.isDisposed) return@executeOnPooledThread
                     ApplicationManager.getApplication().invokeLater {
                         if (project.isDisposed) return@invokeLater
@@ -141,13 +151,12 @@ class Sweep :
                                 oldContents.forEach { removeContent(it, true) }
                             }
                         } catch (e2: Exception) {
-                            // Log and fail silently
-                            Logger
-                                .getInstance(Sweep::class.java)
-                                .warn("Failed to add content to ToolWindow after retry", e2)
+                            logger.warn("[Sweep.displayChatInterface] Failed to add content after retry", e2)
                         }
                     }
                 }
+            } catch (e: Exception) {
+                logger.warn("[Sweep.displayChatInterface] Failed to add content", e)
             }
         }
 
@@ -347,65 +356,125 @@ class Sweep :
         toolWindow: ToolWindow,
         showToolWindow: Boolean = true,
     ) {
-        Disposer.register(SweepProjectService.getInstance(project), this)
-
-        // Hide the tool window title text in the header while keeping the tooltip on the stripe button
-        toolWindow.component.putClientProperty(ToolWindowContentUi.HIDE_ID_LABEL, "true")
-
-        // Add left spacing to the header so it's not flush with the sidebar
-        addHeaderLeftPadding(toolWindow)
-
-        SweepConstantsService.getInstance(project).repoName = ""
-        SweepColorChangeService.getInstance(project).addThemeChangeListener(this) {
-            handleThemeChangeHardReset(project, toolWindow)
+        if (project.isDisposed) {
+            Logger.getInstance(Sweep::class.java).warn("[Sweep._createToolWindowContent] Project is disposed, skipping")
+            return
         }
-        TabManager.getInstance(project).setToolWindow(toolWindow)
-        RecentlyUsedFiles.getInstance(project)
-        setSoftFileDescriptorLimit(32768)
-        updateToolWindowContent(project, toolWindow, showToolWindow)
-        // Defer operations that require ChatComponent (creates Swing components in constructor).
-        // Must run on EDT via invokeLater to avoid Swing thread-safety issues, and must happen
-        // AFTER flushNow to avoid service container write-lock deadlock.
-        ApplicationManager.getApplication().invokeLater {
-            SweepGhostText.getInstance(project).attachGhostTextTo(ChatComponent.getInstance(project).textField)
-        }
-        ApplicationManager.getApplication().invokeLater {
-            // Track whether settings were configured before, so we only rebuild UI
-            // when the configuration state changes (not on every settings change)
-            var wasConfigured = SweepSettings.getInstance().hasBeenSet
 
-            project.messageBus.connect(SweepProjectService.getInstance(project)).apply {
-                subscribe(
-                    SweepSettings.SettingsChangedNotifier.TOPIC,
-                    SweepSettings.SettingsChangedNotifier {
-                        val settings = SweepSettings.getInstance()
-                        val isNowConfigured = settings.hasBeenSet
+        val logger = Logger.getInstance(Sweep::class.java)
+        val isEdt = ApplicationManager.getApplication().isDispatchThread
+        logger.info("[Sweep._createToolWindowContent] START | thread=${Thread.currentThread().name} isEdt=$isEdt project=${project.name}")
 
-                        // Only rebuild the tool window content when the configuration state changes:
-                        // - unconfigured -> configured: show the chat interface
-                        // - configured -> unconfigured: show the sign-in page
-                        // This prevents wiping all chat tabs when users just change settings
-                        // like the backend URL while staying in a configured state.
-                        if (wasConfigured != isNowConfigured) {
-                            updateToolWindowContent(project, toolWindow)
-                        }
-                        wasConfigured = isNowConfigured
+        try {
+            Disposer.register(SweepProjectService.getInstance(project), this)
 
-                        if (isNowConfigured) {
-                            ApplicationManager.getApplication().invokeLater {
-                                if (!project.isDisposed && project.isOpen) {
-                                    ToolWindowManager.getInstance(project).getToolWindow(TOOLWINDOW_NAME)?.show()
+            // Hide the tool window title text in the header while keeping the tooltip on the stripe button
+            toolWindow.component.putClientProperty(ToolWindowContentUi.HIDE_ID_LABEL, "true")
+
+            // Add left spacing to the header so it's not flush with the sidebar
+            addHeaderLeftPadding(toolWindow)
+
+            logger.info("[Sweep._createToolWindowContent] Pre-initializing services on current thread=${Thread.currentThread().name}")
+            SweepConstantsService.getInstance(project).repoName = ""
+            SweepColorChangeService.getInstance(project).addThemeChangeListener(this) {
+                handleThemeChangeHardReset(project, toolWindow)
+            }
+            TabManager.getInstance(project).setToolWindow(toolWindow)
+            RecentlyUsedFiles.getInstance(project)
+            setSoftFileDescriptorLimit(32768)
+            updateToolWindowContent(project, toolWindow, showToolWindow)
+
+            // Defer operations that require ChatComponent (creates Swing components in constructor).
+            // Must run on EDT via invokeLater to avoid Swing thread-safety issues, and must happen
+            // AFTER flushNow to avoid service container write-lock deadlock.
+            ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
+                try {
+                    logger.info("[Sweep._createToolWindowContent.invokeLater] Attaching SweepGhostText to ChatComponent")
+                    // CRITICAL: Wrap ChatComponent.getInstance() in try-catch as it may not be initialized yet
+                    val chatComponent = try {
+                        ChatComponent.getInstance(project)
+                    } catch (e: Exception) {
+                        logger.warn("[Sweep._createToolWindowContent.invokeLater] ChatComponent not ready yet, scheduling retry: ${e.message}")
+                        // Schedule retry on background thread
+                        ApplicationManager.getApplication().executeOnPooledThread {
+                            Thread.sleep(1000) // Wait 1 second
+                            if (!project.isDisposed) {
+                                ApplicationManager.getApplication().invokeLater {
+                                    try {
+                                        SweepGhostText.getInstance(project)
+                                            .attachGhostTextTo(ChatComponent.getInstance(project).textField)
+                                        logger.info("[Sweep._createToolWindowContent.invokeLater] SweepGhostText attached on retry")
+                                    } catch (retryError: Exception) {
+                                        logger.warn(
+                                            "[Sweep._createToolWindowContent.invokeLater] Failed to attach SweepGhostText on retry: ${retryError.message}",
+                                            retryError
+                                        )
+                                    }
                                 }
                             }
                         }
-                    },
-                )
-                subscribe(
-                    FileEditorManagerListener.FILE_EDITOR_MANAGER,
-                    SelectedFileChangeListener.create(project, this),
-                )
+                        return@invokeLater
+                    }
+                    SweepGhostText.getInstance(project).attachGhostTextTo(chatComponent.textField)
+                } catch (e: Exception) {
+                    logger.warn(
+                        "[Sweep._createToolWindowContent.invokeLater] Failed to attach SweepGhostText: ${e.message}",
+                        e
+                    )
+                }
             }
+            ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
+                try {
+                    // Track whether settings were configured before, so we only rebuild UI
+                    // when the configuration state changes (not on every settings change)
+                    var wasConfigured = SweepSettings.getInstance().hasBeenSet
+
+                    project.messageBus.connect(SweepProjectService.getInstance(project)).apply {
+                        subscribe(
+                            SweepSettings.SettingsChangedNotifier.TOPIC,
+                            SweepSettings.SettingsChangedNotifier {
+                                val settings = SweepSettings.getInstance()
+                                val isNowConfigured = settings.hasBeenSet
+
+                                // Only rebuild the tool window content when the configuration state changes:
+                                // - unconfigured -> configured: show the chat interface
+                                // - configured -> unconfigured: show the sign-in page
+                                // This prevents wiping all chat tabs when users just change settings
+                                // like the backend URL while staying in a configured state.
+                                if (wasConfigured != isNowConfigured) {
+                                    updateToolWindowContent(project, toolWindow)
+                                }
+                                wasConfigured = isNowConfigured
+
+                                if (isNowConfigured) {
+                                    ApplicationManager.getApplication().invokeLater {
+                                        if (!project.isDisposed && project.isOpen) {
+                                            ToolWindowManager.getInstance(project).getToolWindow(TOOLWINDOW_NAME)
+                                                ?.show()
+                                        }
+                                    }
+                                }
+                            },
+                        )
+                        subscribe(
+                            FileEditorManagerListener.FILE_EDITOR_MANAGER,
+                            SelectedFileChangeListener.create(project, this),
+                        )
+                    }
+                } catch (e: Exception) {
+                    logger.warn(
+                        "[Sweep._createToolWindowContent.invokeLater] Failed to subscribe settings listener: ${e.message}",
+                        e
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            logger.warn("[Sweep._createToolWindowContent] CRITICAL ERROR during initialization: ${e.message}", e)
         }
+
+        logger.info("[Sweep._createToolWindowContent] END")
     }
 
     /**
@@ -420,6 +489,7 @@ class Sweep :
         toolWindow: ToolWindow,
     ) {
         ApplicationManager.getApplication().invokeLater {
+            if (project.isDisposed) return@invokeLater
             try {
                 // Ensure color cache is up-to-date first
                 SweepColors.refreshColors()
@@ -448,8 +518,11 @@ class Sweep :
                 toolWindow.component.repaint()
             } catch (t: Throwable) {
                 // fallback, reload tool window content if a targeted reset fails
-                Logger.getInstance(Sweep::class.java).warn("Theme change hard reset failed, reloading content", t)
-                updateToolWindowContent(project, toolWindow, showToolWindow = toolWindow.isVisible)
+                Logger.getInstance(Sweep::class.java)
+                    .warn("[Sweep.handleThemeChangeHardReset] Theme reset failed, reloading content", t)
+                if (!project.isDisposed) {
+                    updateToolWindowContent(project, toolWindow, showToolWindow = toolWindow.isVisible)
+                }
             }
         }
     }

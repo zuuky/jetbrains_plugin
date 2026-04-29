@@ -4,6 +4,7 @@ import com.intellij.openapi.actionSystem.ActionPromoter
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.DataContext
+import com.intellij.openapi.application.ApplicationManager
 import dev.sweep.assistant.autocomplete.edit.AcceptEditCompletionAction
 import dev.sweep.assistant.autocomplete.edit.RecentEditsTracker
 import dev.sweep.assistant.autocomplete.edit.RejectEditCompletionAction
@@ -26,9 +27,17 @@ class SweepActionPromoter : ActionPromoter {
 
         // Priority 1: Autocomplete actions (when completion is shown)
         // This must be checked FIRST because autocomplete is time-sensitive and ephemeral
-        if (editor != null && SweepSettings.getInstance().nextEditPredictionFlagOn) {
-            val tracker = RecentEditsTracker.getInstance(project)
-            if (tracker.isCompletionShown) {
+        val settings =
+            runCatching {
+                ApplicationManager.getApplication().getServiceIfCreated(SweepSettings::class.java)
+            }.getOrNull()
+
+        if (editor != null && settings?.nextEditPredictionFlagOn == true) {
+            val tracker =
+                runCatching {
+                    project.getServiceIfCreated(RecentEditsTracker::class.java)
+                }.getOrNull()
+            if (tracker?.isCompletionShown == true) {
                 // Promote autocomplete accept/reject actions with highest priority
                 val autocompleteActions =
                     actions.filter { action ->
@@ -41,8 +50,11 @@ class SweepActionPromoter : ActionPromoter {
         }
 
         // Priority 2: Code block actions (when applied blocks exist)
-        val manager = AppliedCodeBlockManager.getInstance(project)
-        if (manager.getTotalAppliedBlocksForCurrentFile().isNotEmpty()) {
+        val manager =
+            runCatching {
+                project.getServiceIfCreated(AppliedCodeBlockManager::class.java)
+            }.getOrNull()
+        if (manager?.getTotalAppliedBlocksForCurrentFile()?.isNotEmpty() == true) {
             val sweepActions = mutableListOf<AnAction>()
             val otherActions = mutableListOf<AnAction>()
 

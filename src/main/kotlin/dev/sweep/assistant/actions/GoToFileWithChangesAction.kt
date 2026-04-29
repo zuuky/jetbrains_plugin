@@ -19,7 +19,12 @@ class GoToFileWithChangesAction : AnAction() {
 
     override fun update(e: AnActionEvent) {
         val project = e.project
-        val manager = project?.let { AppliedCodeBlockManager.getInstance(it) }
+        val manager =
+            project?.let {
+                runCatching {
+                    it.getServiceIfCreated(AppliedCodeBlockManager::class.java)
+                }.getOrNull()
+            }
         val hasChanges = (manager?.getTotalAppliedBlocksCount() ?: 0) > 0
 
         e.presentation.isEnabled = hasChanges

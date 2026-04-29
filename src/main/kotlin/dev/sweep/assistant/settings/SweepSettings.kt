@@ -6,6 +6,7 @@ import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.openapi.project.Project
+import com.intellij.util.concurrency.AppExecutorUtil
 import com.intellij.util.messages.Topic
 import com.intellij.util.xmlb.XmlSerializerUtil
 import dev.sweep.assistant.tracking.EventType
@@ -46,6 +47,9 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
         fun getInstance(): SweepSettings = ApplicationManager.getApplication().getService(SweepSettings::class.java)
     }
 
+    @Volatile
+    private var isLoadingState = false
+
     // Do not notify settings changed on each save, fire it in config instead
     fun interface SettingsChangedNotifier {
         fun settingsChanged()
@@ -59,10 +63,14 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
     var githubToken: String = DEFAULT_GITHUB_TOKEN
         get() = field.trim()
         set(value) {
+            if (isLoadingState) {
+                field = value
+                return
+            }
             if (value != field) {
                 field = value // make sure you report recent data
                 notifySettingsChanged()
-                TelemetryService.getInstance().sendUsageEvent(EventType.USER_AUTHENTICATED)
+                sendTelemetryLater(EventType.USER_AUTHENTICATED)
             } else {
                 field = value
             }
@@ -76,6 +84,10 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
                 field.trim().trimEnd('/')
             }
         set(value) {
+            if (isLoadingState) {
+                field = value
+                return
+            }
             if (value != field) {
                 field = value
                 notifySettingsChanged()
@@ -91,12 +103,16 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
 
     var nextEditPredictionFlagOn: Boolean = DEFAULT_NEXT_EDIT_PREDICTION_ON
         set(value) {
+            if (isLoadingState) {
+                field = value
+                return
+            }
             if (value != field) {
                 field = value
                 notifySettingsChanged()
                 // Send telemetry when autocomplete is disabled
                 if (!value) {
-                    TelemetryService.getInstance().sendUsageEvent(EventType.AUTOCOMPLETE_DISABLED)
+                    sendTelemetryLater(EventType.AUTOCOMPLETE_DISABLED)
                 }
             } else {
                 field = value
@@ -105,6 +121,10 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
 
     var acceptWordOnRightArrow: Boolean = DEFAULT_ACCEPT_WORD_ON_RIGHT_ARROW
         set(value) {
+            if (isLoadingState) {
+                field = value
+                return
+            }
             if (value != field) {
                 field = value
                 notifySettingsChanged()
@@ -149,6 +169,10 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
      */
     var disableConflictingPlugins: Boolean = DEFAULT_DISABLE_CONFLICTING_PLUGINS
         set(value) {
+            if (isLoadingState) {
+                field = value
+                return
+            }
             if (value != field) {
                 field = value
                 notifySettingsChanged()
@@ -159,6 +183,10 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
 
     var customPrompts: MutableList<CustomPrompt> = mutableListOf()
         set(value) {
+            if (isLoadingState) {
+                field = value
+                return
+            }
             field = value
             notifySettingsChanged()
         }
@@ -274,6 +302,14 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
         }
     }
 
+    private fun sendTelemetryLater(eventType: EventType) {
+        AppExecutorUtil.getAppExecutorService().execute {
+            runCatching {
+                TelemetryService.getInstance().sendUsageEvent(eventType)
+            }
+        }
+    }
+
     fun runNowAndOnSettingsChange(
         project: Project,
         parentDisposable: Disposable,
@@ -295,7 +331,12 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
     override fun getState(): SweepSettings = this
 
     override fun loadState(state: SweepSettings) {
-        XmlSerializerUtil.copyBean(state, this)
+        isLoadingState = true
+        try {
+            XmlSerializerUtil.copyBean(state, this)
+        } finally {
+            isLoadingState = false
+        }
         // Initialize default prompts after loading state
         ensureDefaultPromptsInitialized()
     }

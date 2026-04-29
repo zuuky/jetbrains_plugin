@@ -27,8 +27,11 @@ abstract class EditCompletionActionBase : AnAction() {
         val project = event.project ?: return
         val editor = event.getData(CommonDataKeys.EDITOR)
 
-        val recentEditsTracker = RecentEditsTracker.getInstance(project)
-        event.presentation.isEnabledAndVisible = editor != null && recentEditsTracker.isCompletionShown
+        val recentEditsTracker =
+            runCatching {
+                project.getServiceIfCreated(RecentEditsTracker::class.java)
+            }.getOrNull()
+        event.presentation.isEnabledAndVisible = editor != null && recentEditsTracker?.isCompletionShown == true
     }
 
     protected abstract fun handleCompletion(

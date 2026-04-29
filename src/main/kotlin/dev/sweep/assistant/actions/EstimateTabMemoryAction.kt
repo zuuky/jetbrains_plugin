@@ -3,6 +3,7 @@ package dev.sweep.assistant.actions
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.application.ApplicationManager
 import dev.sweep.assistant.agent.SweepAgentManager
 import dev.sweep.assistant.agent.tools.BashToolService
 import dev.sweep.assistant.components.MessagesComponent
@@ -50,7 +51,10 @@ class EstimateTabMemoryAction : AnAction() {
     override fun getActionUpdateThread() = ActionUpdateThread.BGT
 
     override fun update(event: AnActionEvent) {
-        val isDeveloperModeEnabled = SweepSettings.getInstance().developerModeOn
+        val isDeveloperModeEnabled =
+            runCatching {
+                ApplicationManager.getApplication().getServiceIfCreated(SweepSettings::class.java)?.developerModeOn
+            }.getOrNull() == true
         val project = event.project
         event.presentation.isEnabledAndVisible = isDeveloperModeEnabled && project != null && !project.isDisposed
     }

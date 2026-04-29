@@ -57,9 +57,9 @@ class TelemetryService {
         userProperties: Map<String, String> = emptyMap(),
         eventProperties: Map<String, String> = emptyMap(),
     ) {
-        if (!isTelemetryEnabled()) return
         scope.launch {
             try {
+                if (!isTelemetryEnabled()) return@launch
                 val usageEvent =
                     UsageEvent(
                         eventType = eventType.name,
@@ -96,9 +96,9 @@ class TelemetryService {
 
     // Note that this is for our own backend metrics page to mark this as a success
     fun reportUserStoppingChatEvent(project: Project) {
-        if (!isTelemetryEnabled()) return
         scope.launch {
             try {
+                if (!isTelemetryEnabled()) return@launch
                 val currentMode = SweepComponent.getMode(project)
                 val isPlanningMode = SweepComponent.getPlanningMode(project)
                 val userStoppingChatEvent =

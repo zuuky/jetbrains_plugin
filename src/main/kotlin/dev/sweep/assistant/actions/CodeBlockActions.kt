@@ -13,10 +13,14 @@ abstract class CodeBlockActionBase : AnAction() {
     override fun update(event: AnActionEvent) {
         val project = event.project ?: return
 
-        val codeBlockManager = AppliedCodeBlockManager.getInstance(project)
+        val codeBlockManager =
+            runCatching {
+                project.getServiceIfCreated(AppliedCodeBlockManager::class.java)
+            }.getOrNull()
         // Enable the action if there are code blocks that can be acted upon
         // We don't require the editor from DataContext since we can get it from FileEditorManager
-        event.presentation.isEnabledAndVisible = codeBlockManager.getTotalAppliedBlocksForCurrentFile().isNotEmpty()
+        event.presentation.isEnabledAndVisible =
+            codeBlockManager?.getTotalAppliedBlocksForCurrentFile()?.isNotEmpty() == true
     }
 
     protected abstract fun handleCodeBlock(

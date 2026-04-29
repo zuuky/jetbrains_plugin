@@ -6,6 +6,7 @@ import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.actionSystem.*
+import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.LogLevel
 import com.intellij.openapi.diagnostic.Logger
@@ -20,7 +21,6 @@ import com.intellij.openapi.wm.ex.ToolWindowManagerListener
 import com.intellij.util.concurrency.AppExecutorUtil
 import dev.sweep.assistant.actions.AddToContextFromProjectAction
 import dev.sweep.assistant.actions.ReviewPRAction
-import dev.sweep.assistant.actions.SweepCommitMessageAction
 import dev.sweep.assistant.actions.SweepProblemsAction
 import dev.sweep.assistant.autocomplete.edit.AcceptEditCompletionAction
 import dev.sweep.assistant.autocomplete.edit.RecentEditsTracker
@@ -41,8 +41,12 @@ import dev.sweep.assistant.statusbar.FrontendStatusBarWidgetFactory
 import dev.sweep.assistant.tracking.EventType
 import dev.sweep.assistant.tracking.TelemetryService
 import dev.sweep.assistant.utils.*
+import kotlinx.coroutines.launch
 import java.awt.event.KeyEvent
+import java.text.SimpleDateFormat
+import java.util.*
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.KeyStroke
 
 class SweepStartupActivity :
@@ -50,261 +54,391 @@ class SweepStartupActivity :
     DumbAware {
     companion object {
         private val logger = Logger.getInstance(SweepStartupActivity::class.java)
-        private var stepCounter = 0
+        private val stepCounter = AtomicInteger(0)
+
+        // Deadlock detection: if no log for 30s, dump thread info
+        @Volatile
+        private var lastLogTime = 0L
+        private val DEADLOCK_TIMEOUT_MS = 30_000L
     }
 
     private fun logStep(step: String, detail: String = "") {
         val thread = Thread.currentThread()
         val isEdt = ApplicationManager.getApplication().isDispatchThread
-        stepCounter++
-        val msg = "[SweepStartup step=$stepCounter] $step | thread=${thread.name} isEdt=$isEdt | $detail"
+        val counter = stepCounter.incrementAndGet()
+        lastLogTime = System.currentTimeMillis()
+
+        // Get IDE version info
+        val ideVersion = try {
+            ApplicationInfo.getInstance().fullApplicationName + " " + ApplicationInfo.getInstance().fullVersion
+        } catch (e: Exception) {
+            "unknown"
+        }
+
+        // Get plugin version
+        val pluginVersion = try {
+            dev.sweep.assistant.utils.getCurrentSweepPluginVersion()
+        } catch (e: Exception) {
+            "unknown"
+        }
+
+        val msg =
+            "[SweepStartup step=$counter] $step | thread=${thread.name} isEdt=$isEdt | ide=$ideVersion plugin=$pluginVersion | $detail"
         logger.info(msg)
         println(msg)
         System.out.flush()
         System.err.flush()
+
+        // Check for deadlock (no log for 30s) - more frequent checking
+        if (counter % 5 == 0) { // Check every 5 steps for better detection
+            scheduleDeadlockChecker()
+        }
+    }
+
+    private fun scheduleDeadlockChecker() {
+        AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            val elapsed = System.currentTimeMillis() - lastLogTime
+            if (elapsed > DEADLOCK_TIMEOUT_MS) {
+                logger.error("[SweepStartup] DEADLOCK DETECTED! Last log was ${elapsed}ms ago. Dumping threads:")
+                dumpThreadInfo()
+            }
+        }, DEADLOCK_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+    }
+
+    private fun dumpThreadInfo() {
+        val sb = StringBuilder()
+        sb.appendLine("=== SWEEP PLUGIN THREAD DUMP ===")
+
+        // Get plugin version safely
+        val pluginVersion: String = try {
+            dev.sweep.assistant.utils.getCurrentSweepPluginVersion() ?: "unknown"
+        } catch (e: Exception) {
+            "unknown"
+        }
+        sb.appendLine("Plugin Version: $pluginVersion")
+
+        // Get IDE info safely
+        val ideInfo: String = try {
+            ApplicationInfo.getInstance().fullApplicationName + " " + ApplicationInfo.getInstance().fullVersion
+        } catch (e: Exception) {
+            "unknown"
+        }
+        sb.appendLine("IDE: $ideInfo")
+        sb.appendLine("Time: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(Date())}")
+
+        val threads = Thread.getAllStackTraces().entries
+        sb.appendLine("\nAll Threads (${threads.size} total):")
+        for ((t, stack) in threads.sortedBy { it.key.name }) {
+            val sweepRelated = t.name.contains("Sweep", ignoreCase = true) ||
+                    t.name.contains("pool", ignoreCase = true) ||
+                    t.name.contains("EDT", ignoreCase = true) ||
+                    t.name.contains("write", ignoreCase = true) ||
+                    t.name.contains("read", ignoreCase = true) ||
+                    t.state == Thread.State.BLOCKED ||
+                    t.state == Thread.State.WAITING ||
+                    t.state == Thread.State.TIMED_WAITING
+            if (sweepRelated || t.isAlive) {
+                sb.appendLine("Thread: ${t.name} (id=${t.id}, state=${t.state}, daemon=${t.isDaemon})")
+                for (elem in stack.take(10)) {
+                    sb.appendLine("  at $elem")
+                }
+                sb.appendLine()
+            }
+        }
+
+        // Also dump current thread info
+        sb.appendLine("\nCurrent Thread Info:")
+        sb.appendLine("  Name: ${Thread.currentThread().name}")
+        sb.appendLine("  ID: ${Thread.currentThread().id}")
+        sb.appendLine("  State: ${Thread.currentThread().state}")
+        sb.appendLine("  isEDT: ${ApplicationManager.getApplication().isDispatchThread}")
+
+        logger.error(sb.toString())
+        System.err.println(sb.toString())
     }
 
     override suspend fun execute(project: Project) {
-        // CRITICAL FIX: ProjectActivity.execute() runs on EDT under flushNow's write-intent lock.
-        // Any getInstance() call here (ComponentManagerImpl) causes deadlock because it needs
-        // the same write lock. We MUST move ALL blocking startup work off EDT.
-        // Schedule everything to a pooled thread with 1s delay so flushNow completes first.
-        logStep("SCHEDULE_startup_offload")
-        ApplicationManager.getApplication().executeOnPooledThread {
-            // Wait for IDE startup to fully complete
-            // Larger projects or slower machines may need more time
-            Thread.sleep(3000) // Increased from 1000ms to handle slower startup
-            kotlinx.coroutines.runBlocking {
-                runStartupSequence(project)
+        // ProjectActivity may be called while the IDE is flushing startup events under
+        // write-intent. Never block here and never wait for an invokeLater to finish.
+        logStep("SCHEDULE_startup_background", "project=${project.name}")
+        scheduleDeadlockChecker()
+
+        AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            if (project.isDisposed) {
+                logStep("STARTUP_SKIPPED_project_disposed")
+                return@schedule
             }
-        }
-        logStep("SCHEDULE_startup_offload_DONE")
+
+            logStep("BACKGROUND_startup_sequence_BEGIN", "project=${project.name}")
+            try {
+                runStartupSequence(project)
+            } catch (e: Throwable) {
+                logger.error("[SweepStartup] CRITICAL: Startup sequence failed", e)
+            }
+            logStep("BACKGROUND_startup_sequence_END", "project=${project.name}")
+        }, 3, TimeUnit.SECONDS)
+
+        logStep("SCHEDULE_startup_background_DONE", "project=${project.name}")
     }
 
-    private suspend fun runStartupSequence(project: Project) {
+    private fun runStartupSequence(project: Project) {
+        lastLogTime = System.currentTimeMillis()
         logStep("START", "project=${project.name}")
 
-        // Handle Full Line completion conflicts with similar logic to plugin conflicts
-        // Delay by 5 seconds to ensure IDE subsystems (like EditorColorsManager) are fully initialized
-        AppExecutorUtil.getAppScheduledExecutorService().schedule(
-            {
-                logStep("SCHEDULED_5S_task_START")
-                if (!project.isDisposed) {
-                    // CRITICAL: SweepSettings.getInstance() must NOT be called on EDT during flushNow.
-                    // Read settings off EDT first, then dispatch UI work.
-                    val disableConflicts = try {
-                        SweepSettings.getInstance().disableConflictingPlugins
-                    } catch (e: Exception) {
-                        logStep("SCHEDULED_5S_settings_ERROR: ${e.message}")
-                        false
-                    }
-                    if (!project.isDisposed) {
-                        ApplicationManager.getApplication().invokeLater {
-                            logStep("SCHEDULED_5S_invokeLater_START")
-                            if (!project.isDisposed) {
-                                handleFullLineCompletionConflicts(project, disableConflicts)
-                            }
-                            logStep("SCHEDULED_5S_invokeLater_END")
+        // Handle Full Line completion conflicts - delay by 5 seconds for IDE subsystems to settle
+        // CRITICAL: DO NOT call invokeLater from this pooled task if runStartupSequence is still on EDT
+        // Read settings directly on pooled thread, use invokeLater ONLY for handleFullLineCompletionConflicts
+        AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            logStep("SCHEDULED_5S_task_START")
+            // Read settings on pooled thread - SweepSettings is app-level, already initialized
+            val disableConflicts = try {
+                SweepSettings.getInstance().disableConflictingPlugins
+            } catch (e: Throwable) {
+                logStep("SCHEDULED_5S_settings_ERROR: ${e.message}")
+                false
+            }
+            logStep("SCHEDULED_5S_settings_READY", "disableConflicts=$disableConflicts")
+
+            if (!project.isDisposed) {
+                // Schedule UI work on EDT - only this specific UI operation
+                ApplicationManager.getApplication().invokeLater {
+                    logStep("SCHEDULED_5S_invokeLater_START")
+                    try {
+                        if (!project.isDisposed) {
+                            handleFullLineCompletionConflicts(project, disableConflicts)
                         }
+                    } catch (e: Throwable) {
+                        logStep("SCHEDULED_5S_invokeLater_ERROR: ${e.message}")
                     }
+                    logStep("SCHEDULED_5S_invokeLater_END")
                 }
-                logStep("SCHEDULED_5S_task_END")
-            },
-            5,
-            TimeUnit.SECONDS,
-        )
+            }
+            logStep("SCHEDULED_5S_task_END")
+        }, 5, TimeUnit.SECONDS)
         logStep("SCHEDULED_delayed_5s_task")
 
         // Install VimMotionGhostTextHandler to handle VIM motion with ghost text
         logStep("VimMotionGhostTextService.getInstance_START")
-        VimMotionGhostTextService.getInstance()
-        logStep("VimMotionGhostTextService.getInstance_END")
-
-        // Register AddToContextFromProjectAction dynamically
-        ApplicationManager.getApplication().invokeLater {
-            logStep("invokeLater_actionReg_START")
-            val actionManager = ActionManager.getInstance()
-
-            // Register AddToContextFromProjectAction (only once per IDE)
-            val actionId = "dev.sweep.assistant.actions.AddToContextFromProjectAction"
-            val addToContextAction =
-                if (actionManager.getAction(actionId) == null) {
-                    val action = AddToContextFromProjectAction()
-                    actionManager.unregisterAction(actionId)
-                    actionManager.registerAction(actionId, action)
-
-                    // Add to ProjectViewPopupMenu
-                    actionManager.getAction("ProjectViewPopupMenu")?.let { group ->
-                        if (group is DefaultActionGroup) {
-                            // Only add if not already present in the group
-                            if (!group.containsAction(action)) {
-                                group.addAction(
-                                    action,
-                                    Constraints(Anchor.BEFORE, "CutCopyPasteGroup"),
-                                )
-                            }
-                        }
-                    }
-                    action
-                } else {
-                    actionManager.getAction(actionId) as AddToContextFromProjectAction
-                }
-            SweepActionManager.getInstance(project).addToContextAction = addToContextAction
-
-            // Register SweepCommitMessageAction (only once per IDE)
-            val commitMessageActionId = "dev.sweep.assistant.actions.SweepCommitMessageAction"
-            val commitMessageAction =
-                if (actionManager.getAction(commitMessageActionId) == null) {
-                    val action = SweepCommitMessageAction()
-                    actionManager.unregisterAction(commitMessageActionId)
-                    actionManager.registerAction(commitMessageActionId, action)
-
-                    // Add to Vcs.MessageActionGroup
-                    actionManager.getAction("Vcs.MessageActionGroup")?.let { group ->
-                        if (group is DefaultActionGroup) {
-                            // Only add if not already present in the group
-                            if (!group.containsAction(action)) {
-                                group.addAction(
-                                    action,
-                                    Constraints(Anchor.LAST, null),
-                                )
-                            }
-                        }
-                    }
-                    action
-                } else {
-                    actionManager.getAction(commitMessageActionId) as SweepCommitMessageAction
-                }
-            SweepActionManager.getInstance(project).commitMessageAction = commitMessageAction
-
-            // Register SweepProblemsAction (only once per IDE)
-            val problemsActionId = "dev.sweep.assistant.actions.SweepProblemsAction"
-            val problemsAction =
-                if (actionManager.getAction(problemsActionId) == null) {
-                    val action = SweepProblemsAction()
-                    actionManager.unregisterAction(problemsActionId)
-                    actionManager.registerAction(problemsActionId, action)
-
-                    // Add to ProblemsView.ToolWindow.TreePopup
-                    actionManager.getAction("ProblemsView.ToolWindow.TreePopup")?.let { group ->
-                        if (group is DefaultActionGroup) {
-                            // Only add if not already present in the group
-                            if (!group.containsAction(action)) {
-                                group.addAction(
-                                    action,
-                                    Constraints(Anchor.FIRST, null),
-                                )
-                            }
-                        }
-                    }
-                    action
-                } else {
-                    actionManager.getAction(problemsActionId) as SweepProblemsAction
-                }
-            SweepActionManager.getInstance(project).problemsAction = problemsAction
-
-            // Register ReviewPRAction (only once per IDE)
-            val reviewPRActionId = "dev.sweep.assistant.actions.ReviewPRAction"
-            val reviewPRAction =
-                if (actionManager.getAction(reviewPRActionId) == null) {
-                    val action = ReviewPRAction()
-                    actionManager.unregisterAction(reviewPRActionId)
-                    actionManager.registerAction(reviewPRActionId, action)
-                    action
-                } else {
-                    actionManager.getAction(reviewPRActionId) as ReviewPRAction
-                }
-            SweepActionManager.getInstance(project).reviewPRAction = reviewPRAction
-            logStep("invokeLater_actionReg_END")
+        try {
+            VimMotionGhostTextService.getInstance()
+            logStep("VimMotionGhostTextService.getInstance_END")
+        } catch (e: Exception) {
+            logStep("VimMotionGhostTextService.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize VimMotionGhostTextService", e)
         }
 
+        // Register actions dynamically (must be on EDT via invokeLater)
         ApplicationManager.getApplication().invokeLater {
-            logStep("invokeLater_toolWindow_START")
-            val savedVisibility = SweepMetaData.getInstance().isToolWindowVisible
+            logStep("invokeLater_actionReg_START")
+            try {
+                val actionManager = ActionManager.getInstance()
 
-            val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(SweepConstants.TOOLWINDOW_NAME)
-            if (savedVisibility) {
-                toolWindow?.show()
-            }
-            // Listen for tool window visibility changes to persist state
-            project.messageBus.connect(SweepProjectService.getInstance(project)).subscribe(
-                ToolWindowManagerListener.TOPIC,
-                object : ToolWindowManagerListener {
-                    override fun stateChanged(
-                        toolWindowManager: ToolWindowManager,
-                        changeType: ToolWindowManagerListener.ToolWindowManagerEventType,
-                    ) {
-                        if (changeType == ToolWindowManagerListener.ToolWindowManagerEventType.HideToolWindow ||
-                            changeType == ToolWindowManagerListener.ToolWindowManagerEventType.ActivateToolWindow
-                        ) {
-                            val sweepToolWindow = toolWindowManager.getToolWindow(SweepConstants.TOOLWINDOW_NAME)
-                            if (sweepToolWindow != null) {
-                                SweepMetaData.getInstance().isToolWindowVisible = sweepToolWindow.isVisible
+                // Register AddToContextFromProjectAction (only once per IDE)
+                val actionId = "dev.sweep.assistant.actions.AddToContextFromProjectAction"
+                val addToContextAction =
+                    if (actionManager.getAction(actionId) == null) {
+                        val action = AddToContextFromProjectAction()
+                        actionManager.unregisterAction(actionId)
+                        actionManager.registerAction(actionId, action)
+
+                        // Add to ProjectViewPopupMenu
+                        actionManager.getAction("ProjectViewPopupMenu")?.let { group ->
+                            if (group is DefaultActionGroup) {
+                                // Only add if not already present in the group
+                                if (!group.containsAction(action)) {
+                                    group.addAction(
+                                        action,
+                                        Constraints(Anchor.BEFORE, "CutCopyPasteGroup"),
+                                    )
+                                }
                             }
                         }
+                        action
+                    } else {
+                        actionManager.getAction(actionId) as AddToContextFromProjectAction
                     }
-                },
-            )
-            logStep("invokeLater_toolWindow_END")
+                SweepActionManager.getInstance(project).addToContextAction = addToContextAction
+
+                // Commit message feature removed for local-only build
+
+                // Register SweepProblemsAction (only once per IDE)
+                val problemsActionId = "dev.sweep.assistant.actions.SweepProblemsAction"
+                val problemsAction =
+                    if (actionManager.getAction(problemsActionId) == null) {
+                        val action = SweepProblemsAction()
+                        actionManager.unregisterAction(problemsActionId)
+                        actionManager.registerAction(problemsActionId, action)
+
+                        // Add to ProblemsView.ToolWindow.TreePopup
+                        actionManager.getAction("ProblemsView.ToolWindow.TreePopup")?.let { group ->
+                            if (group is DefaultActionGroup) {
+                                // Only add if not already present in the group
+                                if (!group.containsAction(action)) {
+                                    group.addAction(
+                                        action,
+                                        Constraints(Anchor.FIRST, null),
+                                    )
+                                }
+                            }
+                        }
+                        action
+                    } else {
+                        actionManager.getAction(problemsActionId) as SweepProblemsAction
+                    }
+                SweepActionManager.getInstance(project).problemsAction = problemsAction
+
+                // Register ReviewPRAction (only once per IDE)
+                val reviewPRActionId = "dev.sweep.assistant.actions.ReviewPRAction"
+                val reviewPRAction =
+                    if (actionManager.getAction(reviewPRActionId) == null) {
+                        val action = ReviewPRAction()
+                        actionManager.unregisterAction(reviewPRActionId)
+                        actionManager.registerAction(reviewPRActionId, action)
+                        action
+                    } else {
+                        actionManager.getAction(reviewPRActionId) as ReviewPRAction
+                    }
+                SweepActionManager.getInstance(project).reviewPRAction = reviewPRAction
+                logStep("invokeLater_actionReg_END")
+            } catch (e: Exception) {
+                logStep("invokeLater_actionReg_ERROR: ${e.message}")
+                logger.warn("Failed to register actions", e)
+            }
         }
 
         // Initialize application-level services
         logStep("RipgrepManager.getInstance_START")
-        RipgrepManager.getInstance() // Initialize ripgrep manager on startup
-        logStep("RipgrepManager.getInstance_END")
+        try {
+            RipgrepManager.getInstance() // Initialize ripgrep manager on startup
+            logStep("RipgrepManager.getInstance_END")
+        } catch (e: Exception) {
+            logStep("RipgrepManager.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize RipgrepManager", e)
+        }
 
         // Initialize project-level services
         logStep("SweepProjectService.getInstance_START")
-        SweepProjectService.getInstance(project)
-        logStep("SweepProjectService.getInstance_END")
+        try {
+            SweepProjectService.getInstance(project)
+            logStep("SweepProjectService.getInstance_END")
+        } catch (e: Exception) {
+            logStep("SweepProjectService.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize SweepProjectService", e)
+        }
 
         logStep("FeatureFlagService.getInstance_START")
-        FeatureFlagService.getInstance(project)
-        logStep("FeatureFlagService.getInstance_END")
+        try {
+            FeatureFlagService.getInstance(project)
+            logStep("FeatureFlagService.getInstance_END")
+        } catch (e: Exception) {
+            logStep("FeatureFlagService.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize FeatureFlagService", e)
+        }
 
         logStep("ProjectFilesCache.getInstance_START")
-        ProjectFilesCache.getInstance(project)
-        logStep("ProjectFilesCache.getInstance_END")
+        try {
+            ProjectFilesCache.getInstance(project)
+            logStep("ProjectFilesCache.getInstance_END")
+        } catch (e: Exception) {
+            logStep("ProjectFilesCache.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize ProjectFilesCache", e)
+        }
 
         logStep("EntitiesCache.getInstance_START")
-        EntitiesCache.getInstance(project)
-        logStep("EntitiesCache.getInstance_END")
+        try {
+            EntitiesCache.getInstance(project)
+            logStep("EntitiesCache.getInstance_END")
+        } catch (e: Exception) {
+            logStep("EntitiesCache.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize EntitiesCache", e)
+        }
 
         logStep("TerminalManagerService.getInstance_START")
-        TerminalManagerService.getInstance(project)
-        logStep("TerminalManagerService.getInstance_END")
+        try {
+            TerminalManagerService.getInstance(project)
+            logStep("TerminalManagerService.getInstance_END")
+        } catch (e: Exception) {
+            logStep("TerminalManagerService.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize TerminalManagerService", e)
+        }
 
         logStep("EditorSelectionManager.getInstance_START")
-        EditorSelectionManager.getInstance(project)
-        logStep("EditorSelectionManager.getInstance_END")
+        try {
+            EditorSelectionManager.getInstance(project)
+            logStep("EditorSelectionManager.getInstance_END")
+        } catch (e: Exception) {
+            logStep("EditorSelectionManager.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize EditorSelectionManager", e)
+        }
 
         logStep("SweepNonProjectFilesService.getInstance_START")
-        SweepNonProjectFilesService.getInstance(project)
-        logStep("SweepNonProjectFilesService.getInstance_END")
+        try {
+            SweepNonProjectFilesService.getInstance(project)
+            logStep("SweepNonProjectFilesService.getInstance_END")
+        } catch (e: Exception) {
+            logStep("SweepNonProjectFilesService.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize SweepNonProjectFilesService", e)
+        }
 
-        logStep("SweepCommitMessageService.getInstance_START")
-        SweepCommitMessageService.getInstance(project)
-        logStep("SweepCommitMessageService.getInstance_END")
+        // SweepCommitMessageService removed in local build
 
         logStep("RecentEditsTracker.getInstance_START")
-        RecentEditsTracker.getInstance(project)
-        logStep("RecentEditsTracker.getInstance_END")
+        try {
+            // Do not force this service during project startup. Its constructor wires
+            // editor listeners and reads persisted app settings; doing that while IDE
+            // startup is flushing can block EDT in service initialization.
+            AppExecutorUtil.getAppScheduledExecutorService().schedule({
+                if (project.isDisposed) return@schedule
+                try {
+                    logStep("RecentEditsTracker.deferred_getInstance_START")
+                    RecentEditsTracker.getInstance(project)
+                    logStep("RecentEditsTracker.deferred_getInstance_END")
+                } catch (e: Exception) {
+                    logStep("RecentEditsTracker.deferred_getInstance_ERROR: ${e.message}")
+                    logger.warn("Failed to initialize RecentEditsTracker", e)
+                }
+            }, 10, TimeUnit.SECONDS)
+            logStep("RecentEditsTracker.getInstance_DEFERRED")
+        } catch (e: Exception) {
+            logStep("RecentEditsTracker.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize RecentEditsTracker", e)
+        }
 
         logStep("IdeaVimIntegrationService.getInstance_START")
-        IdeaVimIntegrationService.getInstance(project).configureIdeaVimIntegration()
-        logStep("IdeaVimIntegrationService.getInstance_END")
+        try {
+            IdeaVimIntegrationService.getInstance(project).configureIdeaVimIntegration()
+            logStep("IdeaVimIntegrationService.getInstance_END")
+        } catch (e: Exception) {
+            logStep("IdeaVimIntegrationService.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize IdeaVimIntegrationService", e)
+        }
 
         logStep("SweepMcpService.getInstance_START")
-        SweepMcpService.getInstance(project)
-        logStep("SweepMcpService.getInstance_END")
+        try {
+            SweepMcpService.getInstance(project)
+            logStep("SweepMcpService.getInstance_END")
+        } catch (e: Exception) {
+            logStep("SweepMcpService.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize SweepMcpService", e)
+        }
 
         logStep("SweepColorChangeService.getInstance_START")
-        SweepColorChangeService.getInstance(project)
-        logStep("SweepColorChangeService.getInstance_END")
+        try {
+            SweepColorChangeService.getInstance(project)
+            logStep("SweepColorChangeService.getInstance_END")
+        } catch (e: Exception) {
+            logStep("SweepColorChangeService.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize SweepColorChangeService", e)
+        }
 
         logStep("OSNotificationService.getInstance_START")
-        OSNotificationService.getInstance(project)
-        logStep("OSNotificationService.getInstance_END")
+        try {
+            OSNotificationService.getInstance(project)
+            logStep("OSNotificationService.getInstance_END")
+        } catch (e: Exception) {
+            logStep("OSNotificationService.getInstance_ERROR: ${e.message}")
+            logger.warn("Failed to initialize OSNotificationService", e)
+        }
 
         // CRITICAL: Pre-initialize project-level services used by Sweep tool window factory.
         // Must run on pooled thread (not EDT) to avoid flushNow deadlock.
@@ -312,81 +446,206 @@ class SweepStartupActivity :
         // pre-initialized here. UI-creating services (ChatComponent, SweepComponent, etc.)
         // must be initialized on EDT via invokeLater in the tool window factory.
         logStep("PREINIT_toolWindow_services_START")
-        SweepConstantsService.getInstance(project)
-        TabManager.getInstance(project)
-        RecentlyUsedFiles.getInstance(project)
-        SweepGhostText.getInstance(project)
+        try {
+            SweepConstantsService.getInstance(project)
+            logStep("PREINIT_SweepConstantsService_DONE")
+            TabManager.getInstance(project)
+            logStep("PREINIT_TabManager_DONE")
+            RecentlyUsedFiles.getInstance(project)
+            logStep("PREINIT_RecentlyUsedFiles_DONE")
+            SweepGhostText.getInstance(project)
+            logStep("PREINIT_SweepGhostText_DONE")
+        } catch (e: Exception) {
+            logStep("PREINIT_toolWindow_services_ERROR: ${e.message}")
+            logger.warn("Failed to pre-initialize tool window services", e)
+        }
         logStep("PREINIT_toolWindow_services_END")
 
         logStep("All_services_initialized")
 
-        // Auto-start local autocomplete server if enabled and not already running
-        if (SweepSettings.getInstance().autocompleteLocalMode) {
-            ApplicationManager.getApplication().executeOnPooledThread {
-                logStep("autocomplete_pooledThread_START")
-                val manager = LocalAutocompleteServerManager.getInstance()
-                if (!manager.isServerHealthy()) {
-                    manager.startServerInTerminal(project)
+        // CRITICAL FIX: Show tool window AFTER all services are pre-initialized.
+        // Previously this invokeLater was queued BEFORE service init, creating a race condition
+        // where EDT could show the tool window before services were ready, causing getInstance()
+        // on EDT during flushNow write-lock → deadlock.
+        ApplicationManager.getApplication().invokeLater {
+            logStep("invokeLater_toolWindow_START")
+            try {
+                if (project.isDisposed) {
+                    logStep("invokeLater_toolWindow_SKIPPED_project_disposed")
+                    return@invokeLater
                 }
-                logStep("autocomplete_pooledThread_END")
+                val savedVisibility = SweepMetaData.getInstance().isToolWindowVisible
+
+                val toolWindowManager = ToolWindowManager.getInstance(project)
+                val toolWindow = toolWindowManager.getToolWindow(SweepConstants.TOOLWINDOW_NAME)
+
+                if (toolWindow == null) {
+                    // CRITICAL: Tool window not registered yet - this is the root cause of many freeze issues
+                    // This can happen when plugin is installed but IDE hasn't fully registered the tool window
+                    logStep("invokeLater_toolWindow_NOT_REGISTERED", "scheduling retry")
+                    logger.warn("[SweepStartup] Tool window not registered yet, scheduling retry")
+
+                    // Schedule retry on pooled thread to avoid EDT blocking
+                    ApplicationManager.getApplication().executeOnPooledThread {
+                        Thread.sleep(2000) // Wait 2 seconds for tool window registration
+                        if (!project.isDisposed) {
+                            ApplicationManager.getApplication().invokeLater {
+                                if (project.isDisposed) return@invokeLater
+                                try {
+                                    val tw = ToolWindowManager.getInstance(project)
+                                        .getToolWindow(SweepConstants.TOOLWINDOW_NAME)
+                                    if (tw != null && savedVisibility) {
+                                        tw.show()
+                                        logStep("invokeLater_toolWindow_RETRY_SUCCESS")
+                                    } else {
+                                        logStep("invokeLater_toolWindow_RETRY_FAILED", "toolWindow=${tw != null}")
+                                    }
+                                } catch (retryError: Exception) {
+                                    logStep("invokeLater_toolWindow_RETRY_ERROR: ${retryError.message}")
+                                    logger.warn("[SweepStartup] Failed to show tool window on retry", retryError)
+                                }
+                            }
+                        }
+                    }
+                    return@invokeLater
+                }
+
+                if (savedVisibility) {
+                    toolWindow.show()
+                    logStep("invokeLater_toolWindow_SHOWN")
+                }
+
+                // Listen for tool window visibility changes to persist state
+                project.messageBus.connect(SweepProjectService.getInstance(project)).subscribe(
+                    ToolWindowManagerListener.TOPIC,
+                    object : ToolWindowManagerListener {
+                        override fun stateChanged(
+                            toolWindowManager: ToolWindowManager,
+                            changeType: ToolWindowManagerListener.ToolWindowManagerEventType,
+                        ) {
+                            if (changeType == ToolWindowManagerListener.ToolWindowManagerEventType.HideToolWindow ||
+                                changeType == ToolWindowManagerListener.ToolWindowManagerEventType.ActivateToolWindow
+                            ) {
+                                val sweepToolWindow = toolWindowManager.getToolWindow(SweepConstants.TOOLWINDOW_NAME)
+                                if (sweepToolWindow != null) {
+                                    SweepMetaData.getInstance().isToolWindowVisible = sweepToolWindow.isVisible
+                                }
+                            }
+                        }
+                    },
+                )
+            } catch (e: Exception) {
+                logStep("invokeLater_toolWindow_ERROR: ${e.message}")
+                logger.warn("Failed to initialize tool window visibility", e)
             }
+            logStep("invokeLater_toolWindow_END")
+        }
+
+        // Auto-start local autocomplete server if enabled and not already running
+        try {
+            if (SweepSettings.getInstance().autocompleteLocalMode) {
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    logStep("autocomplete_pooledThread_START")
+                    try {
+                        val manager = LocalAutocompleteServerManager.getInstance()
+                        if (!manager.isServerHealthy()) {
+                            manager.startServerInTerminal(project)
+                        }
+                    } catch (e: Exception) {
+                        logStep("autocomplete_pooledThread_ERROR: ${e.message}")
+                        logger.warn("Failed to start local autocomplete server", e)
+                    }
+                    logStep("autocomplete_pooledThread_END")
+                }
+            }
+        } catch (e: Exception) {
+            logStep("autocomplete_check_ERROR: ${e.message}")
+            logger.warn("Failed to check autocomplete settings", e)
         }
 
         // Send installation telemetry event on first run
-        val metaData = SweepMetaData.getInstance()
-        if (!metaData.hasSeenInstallationTelemetryEvent) {
-            val gatewayModeName = SweepConstants.GATEWAY_MODE.name
-            TelemetryService.getInstance().sendUsageEvent(
-                EventType.INSTALL_SWEEP,
-                userProperties = mapOf("gatewayMode" to gatewayModeName),
-            )
-            metaData.hasSeenInstallationTelemetryEvent = true
+        try {
+            val metaData = SweepMetaData.getInstance()
+            if (!metaData.hasSeenInstallationTelemetryEvent) {
+                val gatewayModeName = SweepConstants.GATEWAY_MODE.name
+                TelemetryService.getInstance().sendUsageEvent(
+                    EventType.INSTALL_SWEEP,
+                    userProperties = mapOf("gatewayMode" to gatewayModeName),
+                )
+                metaData.hasSeenInstallationTelemetryEvent = true
+            }
+        } catch (e: Exception) {
+            logStep("telemetry_ERROR: ${e.message}")
+            logger.warn("Failed to send installation telemetry", e)
         }
 
-        if (!SweepSettings.getInstance().hasBeenSet) {
-            if (SweepSettingsParser.isCloudEnvironment()) {
-                // Cloud: open tool window for login/settings
-                ApplicationManager.getApplication().invokeLater {
-                    if (!project.isDisposed) {
-                        ToolWindowManager.getInstance(project).getToolWindow(SweepConstants.TOOLWINDOW_NAME)?.show()
+        try {
+            if (!SweepSettings.getInstance().hasBeenSet) {
+                if (SweepSettingsParser.isCloudEnvironment()) {
+                    // Cloud: open tool window for login/settings
+                    ApplicationManager.getApplication().invokeLater {
+                        if (!project.isDisposed) {
+                            ToolWindowManager.getInstance(project).getToolWindow(SweepConstants.TOOLWINDOW_NAME)?.show()
+                        }
                     }
+                } else {
+                    // Non-cloud: preserve existing behavior
+                    SweepAuthServer.start(project)
                 }
-            } else {
-                // Non-cloud: preserve existing behavior
-                SweepAuthServer.start(project)
             }
+        } catch (e: Exception) {
+            logStep("authServer_ERROR: ${e.message}")
+            logger.warn("Failed to start auth server", e)
         }
 
         // Register appropriate status bar widget based on gateway mode
-        when (SweepConstants.GATEWAY_MODE) {
-            SweepConstants.GatewayMode.CLIENT -> {
-                // Frontend mode: simple widget that only opens settings
-                ApplicationManager.getApplication().invokeLater {
-                    logStep("invokeLater_statusBar_START")
-                    val statusBar = WindowManager.getInstance().getStatusBar(project)
-                    statusBar?.addWidget(FrontendStatusBarWidgetFactory().createWidget(project), "before Position")
+        try {
+            when (SweepConstants.GATEWAY_MODE) {
+                SweepConstants.GatewayMode.CLIENT -> {
+                    // Frontend mode: simple widget that only opens settings
+                    ApplicationManager.getApplication().invokeLater {
+                        logStep("invokeLater_statusBar_START")
+                        try {
+                            val statusBar = WindowManager.getInstance().getStatusBar(project)
+                            statusBar?.addWidget(
+                                FrontendStatusBarWidgetFactory().createWidget(project),
+                                "before Position"
+                            )
 
-                    // Only start auth flow and open browser if user is not authenticated
-                    if (!SweepSettings.getInstance().hasBeenSet) {
-                        SweepAuthServer.start(project)
-                        BrowserUtil.browse("https://app.sweep.dev", project)
+                            // Only start auth flow and open browser if user is not authenticated
+                            if (!SweepSettings.getInstance().hasBeenSet) {
+                                SweepAuthServer.start(project)
+                                BrowserUtil.browse("https://app.sweep.dev", project)
+                            }
+                        } catch (e: Exception) {
+                            logStep("invokeLater_statusBar_ERROR: ${e.message}")
+                            logger.warn("Failed to register status bar widget", e)
+                        }
+                        logStep("invokeLater_statusBar_END")
                     }
-                    logStep("invokeLater_statusBar_END")
+                }
+
+                SweepConstants.GatewayMode.HOST -> {
+                    // Backend mode: no widget
+                }
+
+                SweepConstants.GatewayMode.NA -> {
+                    // Widget is registered via plugin.xml extension point
                 }
             }
-
-            SweepConstants.GatewayMode.HOST -> {
-                // Backend mode: no widget
-            }
-
-            SweepConstants.GatewayMode.NA -> {
-                // Widget is registered via plugin.xml extension point
-            }
+        } catch (e: Exception) {
+            logStep("statusBar_ERROR: ${e.message}")
+            logger.warn("Failed to register status bar widget", e)
         }
 
         // Untrack plugin state files from VCS
-        untrackIdeaFile(project, "GhostTextManager_v2.xml")
-        untrackIdeaFile(project, "UnifiedUserActionsTrackerManager.xml")
+        try {
+            untrackIdeaFile(project, "GhostTextManager_v2.xml")
+            untrackIdeaFile(project, "UnifiedUserActionsTrackerManager.xml")
+        } catch (e: Exception) {
+            logStep("untrackVcs_ERROR: ${e.message}")
+            logger.warn("Failed to untrack VCS files", e)
+        }
 
         // Suppress KtLint plugin errors for ktlint
         // Skip when plugins with logger wrapper incompatibilities are installed
@@ -415,25 +674,57 @@ class SweepStartupActivity :
 
         // Send health check to backend (only if a base URL is configured, to avoid network timeouts)
         // logStartupData() wraps all network calls in withContext(Dispatchers.IO) - safe to call from EDT
-        if (SweepSettings.getInstance().baseUrl.isNotBlank()) {
-            logStartupData()
+        try {
+            if (SweepSettings.getInstance().baseUrl.isNotBlank()) {
+                // Launch in background coroutine - logStartupData is suspend, runStartupSequence is now non-suspend
+                kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        logStartupData()
+                    } catch (e: Throwable) {
+                        logger.warn("Failed to send startup health check", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            logStep("healthCheck_ERROR: ${e.message}")
+            logger.warn("Failed to send startup health check", e)
         }
 
         // Migrate privacy settings from SweepConfig to SweepMetaData
-        val isNewUser = metaData.chatsSent == 0 && metaData.autocompleteAcceptCount == 0
-        val oldPrivacyMode = if (isNewUser) false else SweepConfig.getInstance(project).isOldPrivacyModeEnabled()
-        if (!metaData.hasPrivacyModeBeenUpdatedFromProject) {
-            metaData.privacyModeEnabled = oldPrivacyMode
-            metaData.hasPrivacyModeBeenUpdatedFromProject = true
+        try {
+            val metaData = SweepMetaData.getInstance()
+            val isNewUser = metaData.chatsSent == 0 && metaData.autocompleteAcceptCount == 0
+            val oldPrivacyMode = if (isNewUser) false else SweepConfig.getInstance(project).isOldPrivacyModeEnabled()
+            if (!metaData.hasPrivacyModeBeenUpdatedFromProject) {
+                metaData.privacyModeEnabled = oldPrivacyMode
+                metaData.hasPrivacyModeBeenUpdatedFromProject = true
+            }
+        } catch (e: Exception) {
+            logStep("privacyMigration_ERROR: ${e.message}")
+            logger.warn("Failed to migrate privacy settings", e)
         }
+
         // Show Gateway onboarding notification if needed
-        GatewayOnboardingService.getInstance().showGatewayOnboardingIfNeeded(project)
+        try {
+            GatewayOnboardingService.getInstance().showGatewayOnboardingIfNeeded(project)
+        } catch (e: Exception) {
+            logStep("gatewayOnboarding_ERROR: ${e.message}")
+            logger.warn("Failed to show gateway onboarding", e)
+        }
+
         // Check for dual plugin installation (Cloud + Enterprise)
         checkForDualPluginInstallation(project)
+
         // Ensure accept/reject actions are bound
         ApplicationManager.getApplication().invokeLater {
-            ensureEditAutocompleteActionsAreBound()
+            try {
+                ensureEditAutocompleteActionsAreBound()
+            } catch (e: Exception) {
+                logStep("ensureEditActions_ERROR: ${e.message}")
+                logger.warn("Failed to ensure edit autocomplete actions are bound", e)
+            }
         }
+
         // Auto-check autocomplete health on startup when in local/remote mode
         checkAutocompleteHealthOnStartup(project)
 
@@ -468,23 +759,9 @@ class SweepStartupActivity :
     }
 
     private fun checkForDualPluginInstallation(project: Project) {
-        ApplicationManager.getApplication().invokeLater {
-            if (project.isDisposed) return@invokeLater
-
-            val cloudPluginId = PluginId.getId("dev.sweep.assistant.cloud")
-            val enterprisePluginId = PluginId.getId("dev.sweep.assistant")
-
-            val isCloudInstalled =
-                PluginManagerCore.isPluginInstalled(cloudPluginId) &&
-                        PluginManagerCore.getPlugin(cloudPluginId)?.isEnabled == true
-            val isEnterpriseInstalled =
-                PluginManagerCore.isPluginInstalled(enterprisePluginId) &&
-                        PluginManagerCore.getPlugin(enterprisePluginId)?.isEnabled == true
-
-            if (isCloudInstalled && isEnterpriseInstalled) {
-                showDualInstallationWarning(project)
-            }
-        }
+        // Cloud/Enterprise dual installation check disabled for local build
+        // Intentionally do not warn or react to dual installations in local mode.
+        // Kept as a no-op to preserve local usage without cloud dependencies.
     }
 
     private fun showDualInstallationWarning(project: Project) {

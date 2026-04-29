@@ -33,7 +33,6 @@ import dev.sweep.assistant.theme.SweepColors
 import dev.sweep.assistant.theme.SweepIcons
 import dev.sweep.assistant.theme.SweepIcons.scale
 import dev.sweep.assistant.utils.*
-import dev.sweep.assistant.utils.MentionSpan
 import dev.sweep.assistant.utils.MentionUtils.computeMentionSpans
 import dev.sweep.assistant.utils.MentionUtils.findMentionSpanAtCaretStrict
 import dev.sweep.assistant.utils.MentionUtils.findMentionSpanAtOrAdjacent
@@ -834,12 +833,17 @@ class FileAutocomplete(
             }.also { textComponent.addCaretListener(it) }
     }
 
+    // 修复递归调用问题：提取实际逻辑到独立函数
     private fun isInsideMention(): Boolean {
         if (!ApplicationManager.getApplication().isDispatchThread) {
             var result: Boolean? = null
-            ApplicationManager.getApplication().invokeAndWait { result = isInsideMention() }
+            ApplicationManager.getApplication().invokeAndWait { result = isInsideMentionOnEdt() }
             return result!!
         }
+        return isInsideMentionOnEdt()
+    }
+
+    private fun isInsideMentionOnEdt(): Boolean {
         val text = textComponent.text
         val caretPosition = textComponent.caretPosition
         return findMentionSpanAtCaretStrict(text, caretPosition) != null
@@ -875,13 +879,17 @@ class FileAutocomplete(
             }
     }
 
+    // 修复递归调用问题：提取实际逻辑到独立函数
     private fun isAtMention(deletion: Boolean): Boolean {
         if (!ApplicationManager.getApplication().isDispatchThread) {
             var result: Boolean? = null
-            ApplicationManager.getApplication().invokeAndWait { result = isAtMention(deletion) }
+            ApplicationManager.getApplication().invokeAndWait { result = isAtMentionOnEdt(deletion) }
             return result!!
         }
+        return isAtMentionOnEdt(deletion)
+    }
 
+    private fun isAtMentionOnEdt(deletion: Boolean): Boolean {
         return if (deletion) {
             // Consider caret strictly inside or at either boundary as being "at mention" for deletion logic
             findMentionSpanAtOrAdjacent(lastText, lastCaretPosition) != null
@@ -1309,12 +1317,17 @@ class FileAutocomplete(
         }, 0)
     }
 
+    // 修复递归调用问题：提取实际逻辑到独立函数
     private fun getCurrentMention(): String? {
         if (!ApplicationManager.getApplication().isDispatchThread) {
             var result: String? = null
-            ApplicationManager.getApplication().invokeAndWait { result = getCurrentMention() }
+            ApplicationManager.getApplication().invokeAndWait { result = getCurrentMentionOnEdt() }
             return result
         }
+        return getCurrentMentionOnEdt()
+    }
+
+    private fun getCurrentMentionOnEdt(): String? {
         val caretPosition = textComponent.caretPosition
         val text = textComponent.text
 
@@ -2037,12 +2050,16 @@ class FileAutocomplete(
         hidePopup()
     }
 
+    // 修复递归调用问题：提取实际逻辑到独立函数
     private fun hidePopup() {
         if (!ApplicationManager.getApplication().isDispatchThread) {
-            ApplicationManager.getApplication().invokeAndWait { hidePopup() }
+            ApplicationManager.getApplication().invokeAndWait { hidePopupOnEdt() }
             return
         }
+        hidePopupOnEdt()
+    }
 
+    private fun hidePopupOnEdt() {
         popup?.run {
             cancel()
             dispose()

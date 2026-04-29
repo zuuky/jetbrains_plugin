@@ -22,11 +22,7 @@ import dev.sweep.assistant.services.ChatHistory
 import dev.sweep.assistant.services.ChatHistory.Companion.STORED_FILE_CONTENTS_TOPIC
 import dev.sweep.assistant.services.MessageList
 import dev.sweep.assistant.theme.SweepColors
-import dev.sweep.assistant.utils.SweepConstants
-import dev.sweep.assistant.utils.convertLineEndings
-import dev.sweep.assistant.utils.getAbsolutePathFromUri
-import dev.sweep.assistant.utils.normalizeCharacters
-import dev.sweep.assistant.utils.withSweepFont
+import dev.sweep.assistant.utils.*
 import dev.sweep.assistant.views.RoundedButton
 import java.awt.BorderLayout
 import java.awt.Dimension
@@ -155,13 +151,28 @@ class CreateFileTool : SweepTool {
                 }
             }
 
-            ApplicationManager.getApplication().invokeAndWait {
-                if (project.isDisposed) {
-                    return@invokeAndWait
-                }
-
+            // 添加 EDT 检查以避免潜在的死锁
+            val app = ApplicationManager.getApplication()
+            if (project.isDisposed) {
+                return CompletedToolCall(
+                    toolCallId = toolCall.toolCallId,
+                    toolName = "create_file",
+                    resultString = "Project was disposed",
+                    status = false,
+                )
+            }
+            if (app.isDispatchThread) {
+                // 已在 EDT，直接执行
                 StringReplaceUtils.createFile(project, filePath, if (autoAccept) content else "")
                 AgentChangeTrackingService.getInstance(project).recordAgentChange("CreateFileTool", filePath)
+            } else {
+                app.invokeAndWait {
+                    if (project.isDisposed) {
+                        return@invokeAndWait
+                    }
+                    StringReplaceUtils.createFile(project, filePath, if (autoAccept) content else "")
+                    AgentChangeTrackingService.getInstance(project).recordAgentChange("CreateFileTool", filePath)
+                }
             }
             if (!autoAccept) {
                 // Check if file exists to determine whether it's actually a new file
@@ -227,6 +238,7 @@ class CreateFileTool : SweepTool {
         }
     }
 
+    // 修复：添加 EDT 检查避免死锁
     /**
      * Shows a file preview dialog with accept/reject options using IntelliJ's built-in diff viewer
      */
@@ -237,16 +249,22 @@ class CreateFileTool : SweepTool {
         newContent: String,
         fileExists: Boolean,
     ): Boolean {
-        var userDecision = false
-
-        ApplicationManager.getApplication().invokeAndWait {
+        val app = ApplicationManager.getApplication()
+        return if (app.isDispatchThread) {
+            // 已在 EDT，直接显示
             val dialog = FilePreviewDialog(project, filePath, existingContent, newContent, fileExists)
-            if (dialog.showAndGet()) {
-                userDecision = true
+            dialog.showAndGet()
+        } else {
+            // 在后台线程，使用 invokeAndWait
+            var userDecision = false
+            app.invokeAndWait {
+                val dialog = FilePreviewDialog(project, filePath, existingContent, newContent, fileExists)
+                if (dialog.showAndGet()) {
+                    userDecision = true
+                }
             }
+            userDecision
         }
-
-        return userDecision
     }
 
     /**

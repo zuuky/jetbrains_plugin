@@ -38,6 +38,10 @@ fun getConnection(
     if (baseUrl.isBlank() && settings.autocompleteLocalMode && settings.autocompleteRemoteUrl.isNotBlank()) {
         baseUrl = settings.autocompleteRemoteUrl
     }
+    if (baseUrl.isBlank()) {
+        throw IOException("Cannot connect to '$relativeURL': Sweep base URL is not configured. Please configure Sweep settings first.")
+    }
+
     // Skip requests to backend/ endpoints
     if (relativeURL.startsWith("backend/")) {
         throw IOException("Skipping backend request: $relativeURL (backend requests are disabled)")

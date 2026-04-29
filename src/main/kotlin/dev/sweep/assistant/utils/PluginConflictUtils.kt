@@ -5,10 +5,9 @@ import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.options.ex.ConfigurableWrapper
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
-import com.intellij.platform.ide.progress.ModalTaskOwner
-import com.intellij.platform.ide.progress.runWithModalProgressBlocking
-import com.intellij.util.concurrency.annotations.RequiresEdt
 import java.util.Locale.getDefault
 
 private val logger = Logger.getInstance("PluginConflictUtils")
@@ -18,68 +17,76 @@ private val logger = Logger.getInstance("PluginConflictUtils")
  * This effectively disables autocomplete for conflicting plugins.
  *
  * @param project The current project
- * @return True if Full Line completion was successfully disabled, false otherwise
  */
-@RequiresEdt
-fun disableFullLineCompletion(project: Project): Boolean =
-    try {
-        // getConfigurables can trigger configurable initialization that performs blocking I/O
-        // (e.g., Python package manager checks), so we need to run it with modal progress
-        val allConfigurables: List<Configurable> =
-            runWithModalProgressBlocking(ModalTaskOwner.project(project), "Loading settings...") {
-                ShowSettingsUtilImpl.getConfigurables(
-                    project = project,
-                    withIdeSettings = true,
-                    checkNonDefaultProject = false,
-                )
-            }
+/**
+ * Disables Full Line completion using a non-modal background task.
+ * CRITICAL FIX: runWithModalProgressBlocking blocks EDT and causes IDE freeze during startup.
+ * Replaced with Task.Backgroundable which runs on pooled thread and shows non-modal progress.
+ */
+fun disableFullLineCompletion(project: Project) {
+    object : Task.Backgroundable(project, "Disabling conflicting autocomplete...", true) {
+        private var result = false
 
-        val inlineCompletionConfigurable =
-            allConfigurables.find { configurable ->
-                // Use getDisplayNameFast() to avoid loading the configurable class.
-                // Accessing displayName directly triggers class loading for ALL configurables,
-                // which causes "No display name specified" errors for third-party plugins
-                // (like Indent Rainbow, Rainbow Brackets, PHP Inspections) that don't specify displayName in XML.
-                // We only use displayNameFast for ConfigurableWrapper, and skip configurables
-                // that don't have a fast display name to avoid triggering class loading.
-                try {
-                    val name = (configurable as? ConfigurableWrapper)?.displayNameFast
-                    name?.lowercase(getDefault()) == "inline completion"
-                } catch (e: Exception) {
-                    // Some plugins may throw exceptions even when accessing displayNameFast
-                    false
+        override fun run(indicator: ProgressIndicator) {
+            try {
+                // getConfigurables can trigger blocking I/O (e.g., Python package manager checks)
+                val allConfigurables: List<Configurable> =
+                    ShowSettingsUtilImpl.getConfigurables(
+                        project = project,
+                        withIdeSettings = true,
+                        checkNonDefaultProject = false,
+                    )
+
+                val inlineCompletionConfigurable =
+                    allConfigurables.find { configurable ->
+                        try {
+                            val name = (configurable as? ConfigurableWrapper)?.displayNameFast
+                            name?.lowercase(getDefault()) == "inline completion"
+                        } catch (e: Exception) {
+                            false
+                        }
+                    }
+
+                if (inlineCompletionConfigurable != null) {
+                    val extensionPoint = (inlineCompletionConfigurable as ConfigurableWrapper).extensionPoint
+                    val configurableComp = extensionPoint.createConfigurable()
+                    val configurableComponent = configurableComp?.createComponent()
+
+                    val uncheckedCount = uncheckAllCheckboxes(configurableComponent)
+
+                    if (uncheckedCount > 0) {
+                        configurableComp?.apply()
+                    }
+
+                    configurableComp?.disposeUIResources()
+                    result = uncheckedCount > 0
                 }
+            } catch (e: Exception) {
+                logger.warn("Failed to disable Full Line completion", e)
+                result = false
             }
-
-        if (inlineCompletionConfigurable != null) {
-            val extensionPoint = (inlineCompletionConfigurable as ConfigurableWrapper).extensionPoint
-            val configurableComp = extensionPoint.createConfigurable()
-            val configurableComponent = configurableComp?.createComponent()
-
-            // Traverse the component tree to find and uncheck all JCheckBox components
-            val uncheckedCount = uncheckAllCheckboxes(configurableComponent)
-
-            // Apply the changes to persist them
-            if (uncheckedCount > 0) {
-                configurableComp?.apply()
-            }
-
-            // Dispose the configurable to clean up
-            configurableComp?.disposeUIResources()
-
-            uncheckedCount > 0
-        } else {
-            false
         }
-    } catch (e: Exception) {
-        logger.warn("Failed to disable Full Line completion", e)
-        false
-    }
+
+        override fun onSuccess() {
+            if (result) {
+                logger.info("Successfully disabled Full Line completion")
+            }
+        }
+
+        override fun onThrowable(error: Throwable) {
+            logger.warn("Error disabling Full Line completion", error)
+        }
+    }.queue()
+}
 
 /**
  * Disables Full Line completion and shows a success notification with the list of conflicting plugins.
  *
  * @param project The current project
+ */
+/**
+ * Disables Full Line completion and shows a success notification.
+ * Uses Task.Backgroundable for non-modal execution.
  */
 fun disableFullLineCompletionAndNotify(project: Project) {
     // Get conflicting plugins to show in notification
@@ -97,20 +104,65 @@ fun disableFullLineCompletionAndNotify(project: Project) {
                 SweepConstants.PLUGIN_ID_TO_NAME[pluginId] ?: PluginManagerCore.getPlugin(pluginId)?.name ?: pluginId.idString
             }.joinToString(separator = ", ")
 
-    // Disable Full Line completion
-    val success = disableFullLineCompletion(project)
+    object : Task.Backgroundable(project, "Disabling conflicting autocomplete...", true) {
+        private var success = false
 
-    if (success) {
-        // Show success notification
-        showNotification(
-            project = project,
-            title = "Disabled Autocomplete For Conflicting Plugins",
-            body =
-                "Sweep has disabled autocomplete for the following conflicting plugins: $pluginNames. " +
-                    "If you still see conflicting autocomplete suggestions, please disable these plugins manually in Settings > Plugins.",
-            notificationGroup = "Sweep Plugin Conflicts",
-        )
-    }
+        override fun run(indicator: ProgressIndicator) {
+            try {
+                val allConfigurables: List<Configurable> =
+                    ShowSettingsUtilImpl.getConfigurables(
+                        project = project,
+                        withIdeSettings = true,
+                        checkNonDefaultProject = false,
+                    )
+
+                val inlineCompletionConfigurable =
+                    allConfigurables.find { configurable ->
+                        try {
+                            val name = (configurable as? ConfigurableWrapper)?.displayNameFast
+                            name?.lowercase(getDefault()) == "inline completion"
+                        } catch (e: Exception) {
+                            false
+                        }
+                    }
+
+                if (inlineCompletionConfigurable != null) {
+                    val extensionPoint = (inlineCompletionConfigurable as ConfigurableWrapper).extensionPoint
+                    val configurableComp = extensionPoint.createConfigurable()
+                    val configurableComponent = configurableComp?.createComponent()
+
+                    val uncheckedCount = uncheckAllCheckboxes(configurableComponent)
+
+                    if (uncheckedCount > 0) {
+                        configurableComp?.apply()
+                    }
+
+                    configurableComp?.disposeUIResources()
+                    success = uncheckedCount > 0
+                }
+            } catch (e: Exception) {
+                logger.warn("Failed to disable Full Line completion", e)
+                success = false
+            }
+        }
+
+        override fun onSuccess() {
+            if (success) {
+                showNotification(
+                    project = project,
+                    title = "Disabled Autocomplete For Conflicting Plugins",
+                    body =
+                        "Sweep has disabled autocomplete for the following conflicting plugins: $pluginNames. " +
+                                "If you still see conflicting autocomplete suggestions, please disable these plugins manually in Settings > Plugins.",
+                    notificationGroup = "Sweep Plugin Conflicts",
+                )
+            }
+        }
+
+        override fun onThrowable(error: Throwable) {
+            logger.warn("Error disabling Full Line completion in AndNotify", error)
+        }
+    }.queue()
 }
 
 /**

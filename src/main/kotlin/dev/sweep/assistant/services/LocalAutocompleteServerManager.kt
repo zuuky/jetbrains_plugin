@@ -296,9 +296,10 @@ class LocalAutocompleteServerManager : Disposable {
     }
 
     private fun installUv() {
+        val timeoutMs = 120000L // 2 分钟超时
 
         try {
-            val process =
+            val processBuilder =
                 if (isWindows) {
                     ProcessBuilder(
                         "powershell",
@@ -306,25 +307,47 @@ class LocalAutocompleteServerManager : Disposable {
                         "ByPass",
                         "-c",
                         "irm https://astral.sh/uv/install.ps1 | iex",
-                    ).redirectErrorStream(true).start()
+                    ).redirectErrorStream(true)
                 } else {
                     ProcessBuilder(
                         "/bin/sh",
                         "-c",
                         "curl -LsSf https://astral.sh/uv/install.sh | sh",
-                    ).redirectErrorStream(true).start()
+                    ).redirectErrorStream(true)
                 }
 
-            val output = process.inputStream.bufferedReader().readText()
-            val exitCode = process.waitFor()
+            val process = processBuilder.start()
+            val startedAt = System.currentTimeMillis()
 
-            if (exitCode == 0) {
-                logger.info("Successfully installed uv")
-                showNotification("Successfully installed uv for local autocomplete.", NotificationType.INFORMATION)
-            } else {
-                logger.warn("Failed to install uv (exit code $exitCode): $output")
-                showNotification("Failed to install uv (exit code $exitCode).", NotificationType.ERROR)
+            // 带超时的等待
+            while (System.currentTimeMillis() - startedAt < timeoutMs) {
+                try {
+                    if (!process.isAlive) {
+                        val exitCode = process.exitValue()
+                        val output = process.inputStream.bufferedReader().readText()
+                        if (exitCode == 0) {
+                            logger.info("Successfully installed uv")
+                            showNotification(
+                                "Successfully installed uv for local autocomplete.",
+                                NotificationType.INFORMATION
+                            )
+                        } else {
+                            logger.warn("Failed to install uv (exit code $exitCode): $output")
+                            showNotification("Failed to install uv (exit code $exitCode).", NotificationType.ERROR)
+                        }
+                        return
+                    }
+                    Thread.sleep(100)
+                } catch (e: InterruptedException) {
+                    process.destroyForcibly()
+                    throw e
+                }
             }
+
+            // 超时
+            process.destroyForcibly()
+            logger.warn("Timed out installing uv after ${timeoutMs}ms")
+            showNotification("Timed out installing uv after 2 minutes.", NotificationType.WARNING)
         } catch (e: Exception) {
             logger.warn("Error installing uv: ${e.message}")
             showNotification("Error installing uv: ${e.message}", NotificationType.ERROR)

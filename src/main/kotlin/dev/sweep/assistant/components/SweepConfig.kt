@@ -248,6 +248,16 @@ class SweepConfig(
     private var state = SweepConfigState()
     private var connection: MessageBusConnection? = null
     private var settingsUpdateCallback: ((SweepSettings) -> Unit)? = null
+        set(value) {
+            // Lazy subscription: only subscribe when the callback is first set.
+            // This avoids calling SweepSettings.getInstance() during toolWindow factory
+            // creation (which runs under flushNow write-intent lock, causing deadlock).
+            if (value != null && !isSettingsListenerSubscribed) {
+                subscribeSettingsListener()
+            }
+            field = value
+        }
+    private var isSettingsListenerSubscribed = false
     private var mcpStatusUpdateCallback: (() -> Unit)? = null
     private var mcpServersPanel: JPanel? = null
     private var mcpServerStatusContainer: JPanel? = null
@@ -258,20 +268,6 @@ class SweepConfig(
     private var privacyModeActionListener: ActionListener? = null
 
     init {
-        // Create the connection once during initialization
-        connection = ApplicationManager.getApplication().messageBus.connect(this)
-        connection?.subscribe(
-            SweepSettings.SettingsChangedNotifier.TOPIC,
-            SweepSettings.SettingsChangedNotifier {
-                // Use ApplicationManager.getApplication().invokeLater for immediate UI updates
-                ApplicationManager.getApplication().invokeLater {
-                    // Update UI components with new values
-                    val updatedSettings = SweepSettings.getInstance()
-                    settingsUpdateCallback?.invoke(updatedSettings)
-                }
-            },
-        )
-
         // Subscribe to MCP server status changes
         project.messageBus.connect(this).subscribe(
             MCPServerStatusNotifier.TOPIC,
@@ -295,6 +291,26 @@ class SweepConfig(
                         // Update the MCP servers panel if it exists
                         mcpStatusUpdateCallback?.invoke()
                     }
+                }
+            },
+        )
+    }
+
+    /**
+     * Subscribes to SweepSettings change notifications (lazy, called from property setter).
+     * Using lazy subscription to avoid SweepSettings.getInstance() during toolWindow factory
+     * creation (which runs under flushNow write-intent lock, causing EDT deadlock).
+     */
+    private fun subscribeSettingsListener() {
+        if (isSettingsListenerSubscribed) return
+        isSettingsListenerSubscribed = true
+
+        ApplicationManager.getApplication().messageBus.connect(this).subscribe(
+            SweepSettings.SettingsChangedNotifier.TOPIC,
+            SweepSettings.SettingsChangedNotifier {
+                ApplicationManager.getApplication().invokeLater {
+                    val updatedSettings = SweepSettings.getInstance()
+                    settingsUpdateCallback?.invoke(updatedSettings)
                 }
             },
         )

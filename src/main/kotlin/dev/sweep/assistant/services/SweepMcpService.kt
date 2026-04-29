@@ -20,7 +20,6 @@ import com.intellij.util.messages.MessageBusConnection
 import dev.sweep.assistant.components.SweepConfig
 import dev.sweep.assistant.mcp.MCPServerConfig
 import dev.sweep.assistant.mcp.MCPServersConfig
-import dev.sweep.assistant.mcp.SweepMcpClient
 import dev.sweep.assistant.mcp.SweepMcpClientManager
 import dev.sweep.assistant.mcp.auth.McpOAuthDiscovery
 import dev.sweep.assistant.mcp.auth.McpOAuthTokenStorage
@@ -589,36 +588,33 @@ class SweepMcpService(
         refreshOnCloseJob =
             scope.launch {
                 delay(debounceDelay)
-                ApplicationManager.getApplication().executeOnPooledThread {
-                    runBlocking {
-                        handleConfigFileChange()
-                        val serverStatusList = sweepMcpClientManager.renderServerStatusList()
-                        val hasPendingAuth = sweepMcpClientManager.hasPendingAuthServers()
-                        // Show notification after refresh completes
-                        ApplicationManager.getApplication().invokeLater {
-                            if (!project.isDisposed) {
-                                val mcpSettingsAction =
-                                    if (hasPendingAuth) {
-                                        val mcpTabName =
-                                            if (SweepSettings.getInstance().hasBeenSet) {
-                                                "MCP Servers"
-                                            } else {
-                                                "MCP Servers (Beta)"
-                                            }
-                                        NotificationAction.createSimpleExpiring("Open MCP Settings to Connect") {
-                                            SweepConfig.getInstance(project).showConfigPopup(mcpTabName)
-                                        }
+                // 直接在协程中执行，避免 executeOnPooledThread + runBlocking 嵌套
+                handleConfigFileChange()
+                val serverStatusList = sweepMcpClientManager.renderServerStatusList()
+                val hasPendingAuth = sweepMcpClientManager.hasPendingAuthServers()
+                // Show notification after refresh completes
+                ApplicationManager.getApplication().invokeLater {
+                    if (!project.isDisposed) {
+                        val mcpSettingsAction =
+                            if (hasPendingAuth) {
+                                val mcpTabName =
+                                    if (SweepSettings.getInstance().hasBeenSet) {
+                                        "MCP Servers"
                                     } else {
-                                        null
+                                        "MCP Servers (Beta)"
                                     }
-                                showNotification(
-                                    project,
-                                    "MCP Status",
-                                    "<html>MCP Servers:<br>$serverStatusList</html>",
-                                    action = mcpSettingsAction,
-                                )
+                                NotificationAction.createSimpleExpiring("Open MCP Settings to Connect") {
+                                    SweepConfig.getInstance(project).showConfigPopup(mcpTabName)
+                                }
+                            } else {
+                                null
                             }
-                        }
+                        showNotification(
+                            project,
+                            "MCP Status",
+                            "<html>MCP Servers:<br>$serverStatusList</html>",
+                            action = mcpSettingsAction,
+                        )
                     }
                 }
             }

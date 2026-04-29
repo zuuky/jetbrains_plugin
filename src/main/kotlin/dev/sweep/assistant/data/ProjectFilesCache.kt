@@ -1,6 +1,7 @@
 package dev.sweep.assistant.data
 
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
@@ -17,28 +18,26 @@ import dev.sweep.assistant.components.SweepConfig
 import dev.sweep.assistant.entities.EntitiesCache
 import dev.sweep.assistant.entities.EntitiesCache.Companion.MAX_FILES_FOR_INDEXING
 import dev.sweep.assistant.listener.VirtualFileSystemWatcher
-import dev.sweep.assistant.settings.SweepMetaData // Import SweepMetaData
-import dev.sweep.assistant.utils.*
+import dev.sweep.assistant.settings.SweepMetaData
+import dev.sweep.assistant.utils.DatabaseOperationQueue
+import dev.sweep.assistant.utils.getProjectNameHash
+import dev.sweep.assistant.utils.osBasePath
+import dev.sweep.assistant.utils.relativePath
 import java.io.File
 import java.nio.file.StandardWatchEventKinds
 import java.sql.Connection
 import java.sql.DriverManager
 import java.sql.PreparedStatement
 import java.sql.SQLException
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
+import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
-import kotlin.compareTo
 import kotlin.io.path.pathString
 
 @Deprecated(
     "FileAutocomplete uses FileSearcher instead, however, we have other code still using " +
-        "ProjectFilesCache. But this can become out of date so should not be used for FileAutocomplete.",
+            "ProjectFilesCache. But this can become out of date so should not be used for FileAutocomplete.",
 )
 @Service(Service.Level.PROJECT)
 class ProjectFilesCache(
@@ -554,23 +553,38 @@ class ProjectFilesCache(
     fun getFilteredProjectFiles(project: Project): Sequence<String> {
         val projectDir = project.osBasePath ?: return emptySequence()
 
+        // CRITICAL: Never block EDT - this will freeze the entire IDE
+        if (ApplicationManager.getApplication().isDispatchThread) {
+            logger.error("[ProjectFilesCache.getFilteredProjectFiles] CALLED ON EDT - returning empty sequence to prevent deadlock!")
+            return emptySequence()
+        }
+
         // Wait for smart mode to ensure file index is fully populated
         // This prevents race conditions during project opening/indexing
         val dumbService = DumbService.getInstance(project)
         if (dumbService.isDumb) {
-            // Wait for smart mode indefinitely to ensure file index is fully populated
+            // Wait for smart mode with a timeout to avoid blocking indefinitely
+            // (e.g. when called on EDT during startup, which would deadlock)
             val latch = java.util.concurrent.CountDownLatch(1)
+            val isEdt = ApplicationManager.getApplication().isDispatchThread
+            logger.info("[ProjectFilesCache.getFilteredProjectFiles] isDumb=true isEdt=$isEdt thread=${Thread.currentThread().name} - waiting for smart mode (60s timeout)")
             dumbService.runWhenSmart {
+                logger.info("[ProjectFilesCache.getFilteredProjectFiles] smart mode callback fired!")
                 latch.countDown()
             }
             try {
-                // Wait indefinitely for smart mode (no timeout)
-                latch.await()
+                if (!latch.await(60, TimeUnit.SECONDS)) {
+                    logger.warn("[ProjectFilesCache.getFilteredProjectFiles] TIMED OUT waiting for smart mode after 60s, isEdt=$isEdt thread=${Thread.currentThread().name}")
+                    return emptySequence()
+                }
+                logger.info("[ProjectFilesCache.getFilteredProjectFiles] smart mode ready, isEdt=$isEdt thread=${Thread.currentThread().name}")
             } catch (e: InterruptedException) {
                 logger.warn("Interrupted while waiting for smart mode", e)
                 Thread.currentThread().interrupt()
                 return emptySequence()
             }
+        } else {
+            logger.info("[ProjectFilesCache.getFilteredProjectFiles] isDumb=false (already smart mode), thread=${Thread.currentThread().name}")
         }
 
         val fileIndex = ProjectFileIndex.getInstance(project)
@@ -785,7 +799,7 @@ class ProjectFilesCache(
 
         // Run indexing in background task
         ProgressManager.getInstance().run(
-            object : Task.Backgroundable(project, "Sweep Reindexing Project Files", false) {
+            object : Task.Backgroundable(project, "Sweep Reindexing Project Files", true) {
                 override fun run(indicator: ProgressIndicator) {
                     if (!::dbConnection.isInitialized || dbConnection.isClosed) {
                         logger.warn("Reindex requested but DB connection not ready for project $projectHash.")
@@ -835,11 +849,13 @@ class ProjectFilesCache(
     }
 
     init {
+        logger.info("[ProjectFilesCache.init] START | thread=${Thread.currentThread().name} isEdt=${ApplicationManager.getApplication().isDispatchThread}")
         val metaData = SweepMetaData.getInstance()
 
         ProgressManager.getInstance().run(
-            object : Task.Backgroundable(project, "Sweep Initializing File Cache", false) {
+            object : Task.Backgroundable(project, "Sweep Initializing File Cache", true) {
                 override fun run(indicator: ProgressIndicator) {
+                    logger.info("[ProjectFilesCache.Task.run] START | thread=${Thread.currentThread().name}")
                     if (!isIndexingInProgress.compareAndSet(false, true)) {
                         logger.info("Initialization skipped: Indexing already in progress for project $projectHash.")
                         return
@@ -872,17 +888,21 @@ class ProjectFilesCache(
                                         addFileAsync(path)
                                         scheduleFileModificationUpdate(path)
 
-                                        val currentCount = SweepMetaData.getInstance().getLastKnownFileCountForProject(projectHash)
-                                        SweepMetaData.getInstance().setLastKnownFileCountForProject(projectHash, currentCount + 1)
+                                        val currentCount =
+                                            SweepMetaData.getInstance().getLastKnownFileCountForProject(projectHash)
+                                        SweepMetaData.getInstance()
+                                            .setLastKnownFileCountForProject(projectHash, currentCount + 1)
                                     }
 
                                     StandardWatchEventKinds.ENTRY_DELETE -> {
                                         removeFileAsync(path)
                                         EntitiesCache.getInstance(project).removeFileFromCache(path)
 
-                                        val currentCount = SweepMetaData.getInstance().getLastKnownFileCountForProject(projectHash)
+                                        val currentCount =
+                                            SweepMetaData.getInstance().getLastKnownFileCountForProject(projectHash)
                                         if (currentCount > 0) {
-                                            SweepMetaData.getInstance().setLastKnownFileCountForProject(projectHash, currentCount - 1)
+                                            SweepMetaData.getInstance()
+                                                .setLastKnownFileCountForProject(projectHash, currentCount - 1)
                                         }
 
                                         for (onDeleteHandler in onDeleteHandlers.values) {
@@ -946,6 +966,7 @@ class ProjectFilesCache(
                 }
             },
         )
+        logger.info("[ProjectFilesCache.init] ProgressManager.run() returned | thread=${Thread.currentThread().name} isEdt=${ApplicationManager.getApplication().isDispatchThread}")
     }
 
     override fun dispose() {

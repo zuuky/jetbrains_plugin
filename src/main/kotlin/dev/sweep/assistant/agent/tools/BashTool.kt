@@ -114,15 +114,21 @@ class BashTool(
                 BASH_PAGER_DISABLE_COMMAND
             }
 
+        val app = ApplicationManager.getApplication()
         try {
-            ApplicationManager.getApplication().invokeAndWait {
+            if (app.isDispatchThread) {
+                // 已在 EDT，直接执行以避免死锁
                 TerminalApiWrapper.sendCommand(widget, pagerDisableCommand, project, isPowerShellTerminal)
+            } else {
+                app.invokeAndWait {
+                    TerminalApiWrapper.sendCommand(widget, pagerDisableCommand, project, isPowerShellTerminal)
+                }
             }
         } catch (e: ProcessCanceledException) {
             throw e
         }
         service.markTerminalAsConfigured(widget)
-        Thread.sleep(500)
+        // 移除了 Thread.sleep(500)，改用更高效的方式
     }
 
     /**

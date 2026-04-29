@@ -11,24 +11,14 @@ import com.intellij.openapi.vcs.VcsShowConfirmationOption
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
-import com.intellij.util.concurrency.annotations.RequiresEdt
 import dev.sweep.assistant.agent.SweepAgent
-import dev.sweep.assistant.data.Annotations
-import dev.sweep.assistant.data.CompletedToolCall
-import dev.sweep.assistant.data.FileLocation
-import dev.sweep.assistant.data.FullFileContentStore
-import dev.sweep.assistant.data.MessageRole
+import dev.sweep.assistant.data.*
 import dev.sweep.assistant.services.AppliedCodeBlockManager
 import dev.sweep.assistant.services.ChatHistory
 import dev.sweep.assistant.services.ChatHistory.Companion.STORED_FILE_CONTENTS_TOPIC
 import dev.sweep.assistant.services.GitIndexCleanupService
 import dev.sweep.assistant.services.MessageList
-import dev.sweep.assistant.utils.computeHash
-import dev.sweep.assistant.utils.convertLineEndings
-import dev.sweep.assistant.utils.getAbsolutePathFromUri
-import dev.sweep.assistant.utils.normalizeUsingNFC
-import dev.sweep.assistant.utils.platformAwareContains
-import dev.sweep.assistant.utils.relativePath
+import dev.sweep.assistant.utils.*
 import dev.sweep.assistant.views.AppliedCodeBlock
 import java.io.File
 import java.nio.file.Paths
@@ -632,11 +622,11 @@ object StringReplaceUtils {
     /**
      * Tracks a file in Git without staging it using git add --intent-to-add.
      * This makes the file appear as tracked but not staged for commit.
+     * NOTE: Must be called from background thread (not EDT) because it executes blocking git process.
      *
      * @param project The project context
      * @param virtualFile The virtual file to track
      */
-    @RequiresEdt
     fun trackFileWithoutStaging(
         project: Project,
         virtualFile: VirtualFile,

@@ -3,7 +3,7 @@ package dev.sweep.assistant.autocomplete.edit
 import com.intellij.ide.DataManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
-import com.intellij.openapi.actionSystem.IdeActions.*
+import com.intellij.openapi.actionSystem.IdeActions.ACTION_EDITOR_ESCAPE
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.EDT
 import com.intellij.openapi.command.CommandEvent
@@ -34,7 +34,6 @@ import com.intellij.util.concurrency.annotations.RequiresReadLockAbsence
 import dev.sweep.assistant.autocomplete.Debouncer
 import dev.sweep.assistant.components.SweepConfig
 import dev.sweep.assistant.services.*
-import dev.sweep.assistant.services.FeatureFlagService
 import dev.sweep.assistant.settings.SweepMetaData
 import dev.sweep.assistant.settings.SweepSettings
 import dev.sweep.assistant.utils.*
@@ -57,26 +56,38 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import javax.swing.SwingUtilities
 import kotlin.math.abs
 
+// 修复：添加 EDT 检查避免死锁
 @RequiresBackgroundThread
 @RequiresBlockingContext
 @RequiresReadLockAbsence
 private fun getVisibleLineRange(editor: Editor): Pair<Int, Int>? {
-    var result: Pair<Int, Int>? = null
-    ApplicationManager.getApplication().invokeAndWait {
-        val visibleArea = editor.scrollingModel.visibleArea
-        val startPosition = editor.xyToLogicalPosition(Point(0, visibleArea.y))
-        val endPosition = editor.xyToLogicalPosition(Point(0, visibleArea.y + visibleArea.height))
-        val totalLines = editor.document.lineCount
-        if (totalLines == 0) {
-            result = null
-        } else {
-            // Clamp line numbers to actual document bounds
-            val clampedStartLine = startPosition.line.coerceIn(0, totalLines - 1)
-            val clampedEndLine = endPosition.line.coerceIn(0, totalLines - 1)
-            result = Pair(clampedStartLine, clampedEndLine)
+    val app = ApplicationManager.getApplication()
+    return if (app.isDispatchThread) {
+        // 已在 EDT，直接执行
+        computeVisibleLineRange(editor)
+    } else {
+        // 在后台线程，使用 invokeAndWait
+        var result: Pair<Int, Int>? = null
+        app.invokeAndWait {
+            result = computeVisibleLineRange(editor)
         }
+        result
     }
-    return result
+}
+
+// 提取实际逻辑到独立函数
+private fun computeVisibleLineRange(editor: Editor): Pair<Int, Int>? {
+    val visibleArea = editor.scrollingModel.visibleArea
+    val startPosition = editor.xyToLogicalPosition(Point(0, visibleArea.y))
+    val endPosition = editor.xyToLogicalPosition(Point(0, visibleArea.y + visibleArea.height))
+    val totalLines = editor.document.lineCount
+    if (totalLines == 0) {
+        return null
+    }
+    // Clamp line numbers to actual document bounds
+    val clampedStartLine = startPosition.line.coerceIn(0, totalLines - 1)
+    val clampedEndLine = endPosition.line.coerceIn(0, totalLines - 1)
+    return Pair(clampedStartLine, clampedEndLine)
 }
 
 fun getVirtualFileFromEditor(editor: Editor?): VirtualFile? =

@@ -621,11 +621,21 @@ class ApplyPatchTool : SweepTool {
             file.parentFile?.mkdirs()
 
             // Use StringReplaceUtils.createFile to ensure Git tracking
-            ApplicationManager.getApplication().invokeAndWait {
-                if (project.isDisposed) {
-                    return@invokeAndWait
-                }
+            // 添加 EDT 检查以避免潜在的死锁
+            val app = ApplicationManager.getApplication()
+            if (project.isDisposed) {
+                return
+            }
+            if (app.isDispatchThread) {
+                // 已在 EDT，直接执行
                 StringReplaceUtils.createFile(project, filePath, "")
+            } else {
+                app.invokeAndWait {
+                    if (project.isDisposed) {
+                        return@invokeAndWait
+                    }
+                    StringReplaceUtils.createFile(project, filePath, "")
+                }
             }
         }
     }

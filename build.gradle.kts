@@ -13,7 +13,7 @@ plugins {
 
 val remoteRobotVersion = "0.11.20"
 val pluginId = "dev.sweep.assistant"
-val pluginName = "Self-Hosted Enterprise Updater"
+val pluginName = "sweep-jetbrains"
 println("Building plugin: $pluginName with ID: $pluginId")
 group = "dev.sweep"
 version = "1.29.6"
@@ -58,7 +58,7 @@ intellijPlatform {
                     ),
                 )
                 channels.set(listOf(ProductRelease.Channel.RELEASE))
-                sinceBuild.set("241")
+                sinceBuild.set("242")
                 untilBuild.set("263.*")
             }
             select {
@@ -77,7 +77,7 @@ intellijPlatform {
                     ),
                 )
                 channels.set(listOf(ProductRelease.Channel.RELEASE))
-                sinceBuild.set("261")
+                sinceBuild.set("242")
                 untilBuild.set("263.*")
             }
         }
@@ -98,7 +98,7 @@ tasks {
     }
 
     patchPluginXml {
-        sinceBuild.set("241")
+        sinceBuild.set("242")
         untilBuild.set("263.*")
     }
 
@@ -187,12 +187,24 @@ tasks {
 
     register<Exec>("installPlugin") {
         group = "plugin"
-        commandLine("./bin/install")
+        commandLine(
+            if (org.gradle.internal.os.OperatingSystem.current().isWindows) {
+                listOf("powershell", "-ExecutionPolicy", "Bypass", "-File", "./bin/install.ps1")
+            } else {
+                listOf("./bin/install")
+            }
+        )
     }
 
     register<Exec>("installCloudPlugin") {
         group = "plugin"
-        commandLine("./bin/install", "--cloud")
+        commandLine(
+            if (org.gradle.internal.os.OperatingSystem.current().isWindows) {
+                listOf("powershell", "-ExecutionPolicy", "Bypass", "-File", "./bin/install.ps1", "--cloud")
+            } else {
+                listOf("./bin/install", "--cloud")
+            }
+        )
     }
 
     register<Exec>("uninstallPlugin") {

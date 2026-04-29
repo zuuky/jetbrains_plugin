@@ -28,8 +28,10 @@ import dev.sweep.assistant.autocomplete.edit.RejectEditCompletionAction
 import dev.sweep.assistant.autocomplete.vim.VimMotionGhostTextService
 import dev.sweep.assistant.components.SweepConfig
 import dev.sweep.assistant.controllers.EditorSelectionManager
+import dev.sweep.assistant.controllers.SweepGhostText
 import dev.sweep.assistant.controllers.TerminalManagerService
 import dev.sweep.assistant.data.ProjectFilesCache
+import dev.sweep.assistant.data.RecentlyUsedFiles
 import dev.sweep.assistant.entities.EntitiesCache
 import dev.sweep.assistant.services.*
 import dev.sweep.assistant.settings.SweepMetaData
@@ -46,29 +48,81 @@ import javax.swing.KeyStroke
 class SweepStartupActivity :
     ProjectActivity,
     DumbAware {
+    companion object {
+        private val logger = Logger.getInstance(SweepStartupActivity::class.java)
+        private var stepCounter = 0
+    }
+
+    private fun logStep(step: String, detail: String = "") {
+        val thread = Thread.currentThread()
+        val isEdt = ApplicationManager.getApplication().isDispatchThread
+        stepCounter++
+        val msg = "[SweepStartup step=$stepCounter] $step | thread=${thread.name} isEdt=$isEdt | $detail"
+        logger.info(msg)
+        println(msg)
+        System.out.flush()
+        System.err.flush()
+    }
+
     override suspend fun execute(project: Project) {
+        // CRITICAL FIX: ProjectActivity.execute() runs on EDT under flushNow's write-intent lock.
+        // Any getInstance() call here (ComponentManagerImpl) causes deadlock because it needs
+        // the same write lock. We MUST move ALL blocking startup work off EDT.
+        // Schedule everything to a pooled thread with 1s delay so flushNow completes first.
+        logStep("SCHEDULE_startup_offload")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            // Wait for IDE startup to fully complete
+            // Larger projects or slower machines may need more time
+            Thread.sleep(3000) // Increased from 1000ms to handle slower startup
+            kotlinx.coroutines.runBlocking {
+                runStartupSequence(project)
+            }
+        }
+        logStep("SCHEDULE_startup_offload_DONE")
+    }
+
+    private suspend fun runStartupSequence(project: Project) {
+        logStep("START", "project=${project.name}")
+
         // Handle Full Line completion conflicts with similar logic to plugin conflicts
         // Delay by 5 seconds to ensure IDE subsystems (like EditorColorsManager) are fully initialized
         AppExecutorUtil.getAppScheduledExecutorService().schedule(
             {
+                logStep("SCHEDULED_5S_task_START")
                 if (!project.isDisposed) {
-                    // This must run on the EDT because it may trigger UI/settings logic
-                    ApplicationManager.getApplication().invokeLater {
-                        if (!project.isDisposed) {
-                            handleFullLineCompletionConflicts(project)
+                    // CRITICAL: SweepSettings.getInstance() must NOT be called on EDT during flushNow.
+                    // Read settings off EDT first, then dispatch UI work.
+                    val disableConflicts = try {
+                        SweepSettings.getInstance().disableConflictingPlugins
+                    } catch (e: Exception) {
+                        logStep("SCHEDULED_5S_settings_ERROR: ${e.message}")
+                        false
+                    }
+                    if (!project.isDisposed) {
+                        ApplicationManager.getApplication().invokeLater {
+                            logStep("SCHEDULED_5S_invokeLater_START")
+                            if (!project.isDisposed) {
+                                handleFullLineCompletionConflicts(project, disableConflicts)
+                            }
+                            logStep("SCHEDULED_5S_invokeLater_END")
                         }
                     }
                 }
+                logStep("SCHEDULED_5S_task_END")
             },
             5,
             TimeUnit.SECONDS,
         )
+        logStep("SCHEDULED_delayed_5s_task")
 
         // Install VimMotionGhostTextHandler to handle VIM motion with ghost text
+        logStep("VimMotionGhostTextService.getInstance_START")
         VimMotionGhostTextService.getInstance()
+        logStep("VimMotionGhostTextService.getInstance_END")
 
         // Register AddToContextFromProjectAction dynamically
         ApplicationManager.getApplication().invokeLater {
+            logStep("invokeLater_actionReg_START")
             val actionManager = ActionManager.getInstance()
 
             // Register AddToContextFromProjectAction (only once per IDE)
@@ -161,9 +215,11 @@ class SweepStartupActivity :
                     actionManager.getAction(reviewPRActionId) as ReviewPRAction
                 }
             SweepActionManager.getInstance(project).reviewPRAction = reviewPRAction
+            logStep("invokeLater_actionReg_END")
         }
 
         ApplicationManager.getApplication().invokeLater {
+            logStep("invokeLater_toolWindow_START")
             val savedVisibility = SweepMetaData.getInstance().isToolWindowVisible
 
             val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(SweepConstants.TOOLWINDOW_NAME)
@@ -189,33 +245,90 @@ class SweepStartupActivity :
                     }
                 },
             )
+            logStep("invokeLater_toolWindow_END")
         }
 
         // Initialize application-level services
+        logStep("RipgrepManager.getInstance_START")
         RipgrepManager.getInstance() // Initialize ripgrep manager on startup
+        logStep("RipgrepManager.getInstance_END")
 
         // Initialize project-level services
+        logStep("SweepProjectService.getInstance_START")
         SweepProjectService.getInstance(project)
+        logStep("SweepProjectService.getInstance_END")
+
+        logStep("FeatureFlagService.getInstance_START")
         FeatureFlagService.getInstance(project)
+        logStep("FeatureFlagService.getInstance_END")
+
+        logStep("ProjectFilesCache.getInstance_START")
         ProjectFilesCache.getInstance(project)
+        logStep("ProjectFilesCache.getInstance_END")
+
+        logStep("EntitiesCache.getInstance_START")
         EntitiesCache.getInstance(project)
+        logStep("EntitiesCache.getInstance_END")
+
+        logStep("TerminalManagerService.getInstance_START")
         TerminalManagerService.getInstance(project)
+        logStep("TerminalManagerService.getInstance_END")
+
+        logStep("EditorSelectionManager.getInstance_START")
         EditorSelectionManager.getInstance(project)
+        logStep("EditorSelectionManager.getInstance_END")
+
+        logStep("SweepNonProjectFilesService.getInstance_START")
         SweepNonProjectFilesService.getInstance(project)
+        logStep("SweepNonProjectFilesService.getInstance_END")
+
+        logStep("SweepCommitMessageService.getInstance_START")
         SweepCommitMessageService.getInstance(project)
+        logStep("SweepCommitMessageService.getInstance_END")
+
+        logStep("RecentEditsTracker.getInstance_START")
         RecentEditsTracker.getInstance(project)
+        logStep("RecentEditsTracker.getInstance_END")
+
+        logStep("IdeaVimIntegrationService.getInstance_START")
         IdeaVimIntegrationService.getInstance(project).configureIdeaVimIntegration()
+        logStep("IdeaVimIntegrationService.getInstance_END")
+
+        logStep("SweepMcpService.getInstance_START")
         SweepMcpService.getInstance(project)
+        logStep("SweepMcpService.getInstance_END")
+
+        logStep("SweepColorChangeService.getInstance_START")
         SweepColorChangeService.getInstance(project)
+        logStep("SweepColorChangeService.getInstance_END")
+
+        logStep("OSNotificationService.getInstance_START")
         OSNotificationService.getInstance(project)
+        logStep("OSNotificationService.getInstance_END")
+
+        // CRITICAL: Pre-initialize project-level services used by Sweep tool window factory.
+        // Must run on pooled thread (not EDT) to avoid flushNow deadlock.
+        // IMPORTANT: Only services WITHOUT Swing components in constructors can be safely
+        // pre-initialized here. UI-creating services (ChatComponent, SweepComponent, etc.)
+        // must be initialized on EDT via invokeLater in the tool window factory.
+        logStep("PREINIT_toolWindow_services_START")
+        SweepConstantsService.getInstance(project)
+        TabManager.getInstance(project)
+        RecentlyUsedFiles.getInstance(project)
+        SweepGhostText.getInstance(project)
+        logStep("PREINIT_toolWindow_services_END")
+
+        logStep("All_services_initialized")
 
         // Auto-start local autocomplete server if enabled and not already running
         if (SweepSettings.getInstance().autocompleteLocalMode) {
             ApplicationManager.getApplication().executeOnPooledThread {
+                logStep("autocomplete_pooledThread_START")
                 val manager = LocalAutocompleteServerManager.getInstance()
                 if (!manager.isServerHealthy()) {
                     manager.startServerInTerminal(project)
                 }
+                logStep("autocomplete_pooledThread_END")
             }
         }
 
@@ -249,6 +362,7 @@ class SweepStartupActivity :
             SweepConstants.GatewayMode.CLIENT -> {
                 // Frontend mode: simple widget that only opens settings
                 ApplicationManager.getApplication().invokeLater {
+                    logStep("invokeLater_statusBar_START")
                     val statusBar = WindowManager.getInstance().getStatusBar(project)
                     statusBar?.addWidget(FrontendStatusBarWidgetFactory().createWidget(project), "before Position")
 
@@ -257,11 +371,14 @@ class SweepStartupActivity :
                         SweepAuthServer.start(project)
                         BrowserUtil.browse("https://app.sweep.dev", project)
                     }
+                    logStep("invokeLater_statusBar_END")
                 }
             }
+
             SweepConstants.GatewayMode.HOST -> {
                 // Backend mode: no widget
             }
+
             SweepConstants.GatewayMode.NA -> {
                 // Widget is registered via plugin.xml extension point
             }
@@ -281,7 +398,7 @@ class SweepStartupActivity :
         val hasLoggerIncompatiblePlugin =
             loggerIncompatiblePlugins.any { pluginId ->
                 PluginManagerCore.isPluginInstalled(pluginId) &&
-                    PluginManagerCore.getPlugin(pluginId)?.isEnabled == true
+                        PluginManagerCore.getPlugin(pluginId)?.isEnabled == true
             }
 
         if (!hasLoggerIncompatiblePlugin) {
@@ -296,8 +413,11 @@ class SweepStartupActivity :
             }
         }
 
-        // Send health check to backend
-        logStartupData()
+        // Send health check to backend (only if a base URL is configured, to avoid network timeouts)
+        // logStartupData() wraps all network calls in withContext(Dispatchers.IO) - safe to call from EDT
+        if (SweepSettings.getInstance().baseUrl.isNotBlank()) {
+            logStartupData()
+        }
 
         // Migrate privacy settings from SweepConfig to SweepMetaData
         val isNewUser = metaData.chatsSent == 0 && metaData.autocompleteAcceptCount == 0
@@ -316,6 +436,8 @@ class SweepStartupActivity :
         }
         // Auto-check autocomplete health on startup when in local/remote mode
         checkAutocompleteHealthOnStartup(project)
+
+        logStep("ALL_STARTUP_COMPLETE")
     }
 
     private fun checkAutocompleteHealthOnStartup(project: Project) {
@@ -354,10 +476,10 @@ class SweepStartupActivity :
 
             val isCloudInstalled =
                 PluginManagerCore.isPluginInstalled(cloudPluginId) &&
-                    PluginManagerCore.getPlugin(cloudPluginId)?.isEnabled == true
+                        PluginManagerCore.getPlugin(cloudPluginId)?.isEnabled == true
             val isEnterpriseInstalled =
                 PluginManagerCore.isPluginInstalled(enterprisePluginId) &&
-                    PluginManagerCore.getPlugin(enterprisePluginId)?.isEnabled == true
+                        PluginManagerCore.getPlugin(enterprisePluginId)?.isEnabled == true
 
             if (isCloudInstalled && isEnterpriseInstalled) {
                 showDualInstallationWarning(project)
@@ -410,8 +532,8 @@ class SweepStartupActivity :
         notification.notify(project)
     }
 
-    private fun handleFullLineCompletionConflicts(project: Project) {
-        if (SweepSettings.getInstance().disableConflictingPlugins) {
+    private fun handleFullLineCompletionConflicts(project: Project, disableConflicts: Boolean) {
+        if (disableConflicts) {
             disableFullLineCompletion(project)
         } else {
             // Even when auto-disable is off, check for conflicts and notify user
@@ -449,7 +571,8 @@ class SweepStartupActivity :
             val pluginNames =
                 enabledConflictingPlugins
                     .map { pluginId ->
-                        SweepConstants.PLUGIN_ID_TO_NAME[pluginId] ?: PluginManagerCore.getPlugin(pluginId)?.name ?: pluginId.idString
+                        SweepConstants.PLUGIN_ID_TO_NAME[pluginId] ?: PluginManagerCore.getPlugin(pluginId)?.name
+                        ?: pluginId.idString
                     }.joinToString(separator = ", ")
 
             if (autoDisable) {
@@ -462,8 +585,8 @@ class SweepStartupActivity :
                     title = "Conflicting Autocomplete Plugins Detected",
                     body =
                         "Sweep detected the following potentially conflicting plugins: $pluginNames. " +
-                            "These plugins may interfere with Sweep's autocomplete functionality. " +
-                            "You can manage these plugins in Settings > Plugins.",
+                                "These plugins may interfere with Sweep's autocomplete functionality. " +
+                                "You can manage these plugins in Settings > Plugins.",
                     notificationGroup = "Sweep Plugin Conflicts",
                     notificationType = NotificationType.WARNING,
                     action =

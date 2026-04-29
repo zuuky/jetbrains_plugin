@@ -73,45 +73,54 @@ class FirstRunSettingsActivity :
         }
 
     override suspend fun execute(project: Project) {
+        // CRITICAL FIX: ProjectActivity.execute() runs on EDT. Do NOTHING here.
+        // All work (including SweepSettings.getInstance()) must run off EDT to avoid
+        // deadlock with flushNow's write-intent lock in ComponentManagerImpl.
+        ApplicationManager.getApplication().executeOnPooledThread {
+            // Wait for IDE startup + flushNow to fully complete
+            Thread.sleep(3000) // Increased from 2000ms to handle slower startup
+            if (project.isDisposed) return@executeOnPooledThread
+            val hasBeenSet = try {
+                SweepSettings.getInstance().hasBeenSet
+            } catch (e: Exception) {
+                false
+            }
+            doKeymapSetup(project, hasBeenSet)
+        }
+    }
+
+    private fun doKeymapSetup(project: Project, hasBeenSet: Boolean) {
         ApplicationManager.getApplication().invokeLater {
+            if (project.isDisposed) return@invokeLater
             val keyMap = KeymapManager.getInstance().activeKeymap
 
             for ((actionId, keyBindings) in SWEEP_ACTION_IDS_TO_DEFAULT_SHORTCUTS) {
                 var needsRebinding = false
                 val existingShortcuts = keyMap.getShortcuts(actionId)
-                // Requires rebinding if no shortcuts exist
                 if (existingShortcuts.isEmpty()) {
                     needsRebinding = true
                 }
 
-                // Check if any other non-sweep actions share these shortcuts
                 for (existingShortcut in existingShortcuts) {
-                    val conflictingActions = keyMap.getActionIds(existingShortcut).filter { !it.startsWith("dev.sweep.assistant") }
+                    val conflictingActions =
+                        keyMap.getActionIds(existingShortcut).filter { !it.startsWith("dev.sweep.assistant") }
                     if (conflictingActions.isNotEmpty()) {
                         needsRebinding = true
                         break
                     }
                 }
 
-                if (!needsRebinding) {
-                    continue
-                }
+                if (!needsRebinding) continue
 
                 var containsNonDefaultBinding = false
-
-                // Check if the user has mapped this shortcut to a non default binding
                 for (existingShortcut in existingShortcuts) {
                     if (existingShortcut !in keyBindings.map { KeyboardShortcut(KeyStroke.getKeyStroke(it), null) }) {
                         containsNonDefaultBinding = true
                         break
                     }
                 }
-                // If the user has manually remapped, do not overwrite their shortcuts
-                if (containsNonDefaultBinding) {
-                    continue
-                }
+                if (containsNonDefaultBinding) continue
 
-                // Remove all conflicting shortcuts and track overridden key bindings
                 var hasConflicts = false
                 val osKeyBinding = getOSAppropriateKeyBinding(keyBindings)
                 val keyStroke = KeyStroke.getKeyStroke(osKeyBinding)
@@ -131,14 +140,12 @@ class FirstRunSettingsActivity :
                     }
                 }
 
-                // Add the OS-appropriate shortcut
                 if (keyStroke != null) {
                     keyMap.addShortcut(actionId, KeyboardShortcut(keyStroke, null))
                 }
             }
 
-            // Check for potential conflicts with Sweep actions
-            checkActionConflicts(project, keyMap)
+            checkActionConflicts(project, keyMap, hasBeenSet)
         }
     }
 
@@ -148,6 +155,7 @@ class FirstRunSettingsActivity :
     private fun checkActionConflicts(
         project: Project,
         keyMap: com.intellij.openapi.keymap.Keymap,
+        hasBeenSet: Boolean,
     ) {
         data class ActionToCheck(
             val actionId: String,
@@ -208,21 +216,24 @@ class FirstRunSettingsActivity :
             }
         }
 
-        if (allConflicts.isNotEmpty() && SweepSettings.getInstance().hasBeenSet) {
+        if (allConflicts.isNotEmpty() && hasBeenSet) {
             val message = buildConflictMessage(allConflicts)
             val firstConflictActionId = allConflicts.first().conflicts.first()
             val title = if (allConflicts.size == 1) "Remap Conflicting Shortcut" else "Remap Conflicting Shortcuts"
-            val actionLabel = if (allConflicts.size == 1) "Remap Conflicting Shortcut" else "Remap Conflicting Shortcuts"
+            val actionLabel =
+                if (allConflicts.size == 1) "Remap Conflicting Shortcut" else "Remap Conflicting Shortcuts"
 
             // Schedule notification to show 5 seconds later
             AppExecutorUtil.getAppScheduledExecutorService().schedule(
                 {
                     if (!project.isDisposed && !SweepMetaData.getInstance().dontShowCmdJConflictNotifications) {
                         ApplicationManager.getApplication().invokeLater {
-                            val group = NotificationGroupManager.getInstance().getNotificationGroup("Sweep AI Notifications")
+                            val group =
+                                NotificationGroupManager.getInstance().getNotificationGroup("Sweep AI Notifications")
 
                             if (group != null) {
-                                val notification = group.createNotification(title, message, NotificationType.INFORMATION)
+                                val notification =
+                                    group.createNotification(title, message, NotificationType.INFORMATION)
 
                                 notification.addAction(
                                     NotificationAction.createSimple(actionLabel) {
@@ -272,6 +283,7 @@ class FirstRunSettingsActivity :
                     "The shortcut ${conflict.formattedShortcut} for '${conflict.actionName}' conflicts with: $conflictingActionNames. $CONFLICT_INSTRUCTIONS"
                 }
             }
+
             else -> {
                 val conflictMessages =
                     conflicts.joinToString(" ") { conflict ->
@@ -279,7 +291,8 @@ class FirstRunSettingsActivity :
                             conflict.conflicts
                                 .take(2)
                                 .mapNotNull { actionId ->
-                                    ACTION_ID_TO_NAME[actionId] ?: actionId.substringAfterLast('.').replace("Action", "")
+                                    ACTION_ID_TO_NAME[actionId] ?: actionId.substringAfterLast('.')
+                                        .replace("Action", "")
                                 }.joinToString(", ")
 
                         if (conflict.conflicts.size > 2) {

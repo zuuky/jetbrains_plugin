@@ -130,7 +130,10 @@ class Sweep :
                 // Retry after 200ms delay on background thread, then schedule back to UI thread
                 ApplicationManager.getApplication().executeOnPooledThread {
                     Thread.sleep(200)
+                    // 添加项目 dispose 检查，避免在项目关闭后执行
+                    if (project.isDisposed) return@executeOnPooledThread
                     ApplicationManager.getApplication().invokeLater {
+                        if (project.isDisposed) return@invokeLater
                         try {
                             toolWindow.contentManager.run {
                                 val oldContents = contents.toList()
@@ -190,8 +193,8 @@ class Sweep :
                 // Only create report action if user hasn't reached usage thresholds
                 val shouldShowReport =
                     SweepMetaData.getInstance().reportButtonClicks < 1 &&
-                        SweepMetaData.getInstance().chatsSent < 5 &&
-                        SweepMetaData.getInstance().autocompleteAcceptCount < 50
+                            SweepMetaData.getInstance().chatsSent < 5 &&
+                            SweepMetaData.getInstance().autocompleteAcceptCount < 50
                 SweepActionManager.getInstance(project).reportAction =
                     if (!shouldShowReport) {
                         null
@@ -358,9 +361,14 @@ class Sweep :
         }
         TabManager.getInstance(project).setToolWindow(toolWindow)
         RecentlyUsedFiles.getInstance(project)
-        SweepGhostText.getInstance(project).attachGhostTextTo(ChatComponent.getInstance(project).textField)
         setSoftFileDescriptorLimit(32768)
         updateToolWindowContent(project, toolWindow, showToolWindow)
+        // Defer operations that require ChatComponent (creates Swing components in constructor).
+        // Must run on EDT via invokeLater to avoid Swing thread-safety issues, and must happen
+        // AFTER flushNow to avoid service container write-lock deadlock.
+        ApplicationManager.getApplication().invokeLater {
+            SweepGhostText.getInstance(project).attachGhostTextTo(ChatComponent.getInstance(project).textField)
+        }
         ApplicationManager.getApplication().invokeLater {
             // Track whether settings were configured before, so we only rebuild UI
             // when the configuration state changes (not on every settings change)

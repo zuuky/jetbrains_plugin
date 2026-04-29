@@ -439,7 +439,8 @@ class GlobTool : SweepTool {
                                     .normalize()
                                     .toString()
                             }
-                        } catch (_: Exception) {
+                        } catch (e: Exception) {
+                            logger.debug("Failed to resolve relative path: ${e.message}")
                             Paths
                                 .get(workingDir.path)
                                 .resolve(pathStr)
@@ -495,7 +496,8 @@ class GlobTool : SweepTool {
             }
 
             return true
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("ripgrep failed: ${e.message}")
             process?.destroyForcibly()
             // Any failure -> fallback to index scan
             return false

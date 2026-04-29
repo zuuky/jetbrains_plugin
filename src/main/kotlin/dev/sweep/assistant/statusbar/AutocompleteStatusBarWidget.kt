@@ -8,6 +8,7 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.PermanentInstallationID
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.ui.popup.PopupStep
@@ -50,6 +51,7 @@ class AutocompleteStatusBarWidget(
     StatusBarWidget.IconPresentation,
     Disposable {
     companion object {
+        private val logger = Logger.getInstance(AutocompleteStatusBarWidget::class.java)
         const val ID = "SweepAutocompleteStatus"
         private const val CHECK_INTERVAL_MS = 900000L // Check every 15 minutes
         private const val TIMEOUT_MS = 5000 // 5 second timeout for health check
@@ -296,7 +298,7 @@ class AutocompleteStatusBarWidget(
                         .getNotificationGroup("Sweep Autocomplete")
 
                 if (notificationGroup == null) {
-                    println("Sweep Autocomplete: Notification group not found!")
+                    logger.warn("Sweep Autocomplete: Notification group not found!")
                     return@invokeLater
                 }
 
@@ -318,8 +320,7 @@ class AutocompleteStatusBarWidget(
 
                 notification.notify(project)
             } catch (e: Exception) {
-                println("Sweep Autocomplete: Error showing low completions warning: ${e.message}")
-                e.printStackTrace()
+                logger.warn("Error showing low completions warning: ${e.message}", e)
             }
         }
     }
@@ -333,7 +334,7 @@ class AutocompleteStatusBarWidget(
                         .getNotificationGroup("Sweep Autocomplete")
 
                 if (notificationGroup == null) {
-                    println("Sweep Autocomplete: Notification group not found!")
+                    logger.warn("Sweep Autocomplete: Notification group not found!")
                     return@invokeLater
                 }
 
@@ -355,8 +356,7 @@ class AutocompleteStatusBarWidget(
 
                 notification.notify(project)
             } catch (e: Exception) {
-                println("Sweep Autocomplete: Error showing out of completions notification: ${e.message}")
-                e.printStackTrace()
+                logger.warn("Error showing out of completions notification: ${e.message}", e)
             }
         }
     }

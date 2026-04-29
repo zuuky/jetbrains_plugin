@@ -148,6 +148,13 @@
             <keyboard-shortcut keymap="$default" first-keystroke="alt shift BACK_SPACE"/>
             <keyboard-shortcut keymap="Mac OS X" first-keystroke="alt shift BACK_SPACE"/>
         </action>
+	    <action id="dev.sweep.assistant.actions.SweepCommitMessageAction"
+	            class="dev.sweep.assistant.actions.SweepCommitMessageAction"
+	            text="Generate Commit Message"
+	            description="Generate a commit message for the selected changes"
+	            icon="/icons/sweep16x16.svg">
+		    <add-to-group group-id="Vcs.MessageActionGroup" anchor="last"/>
+	    </action>
         <action id="dev.sweep.assistant.actions.FocusChatAction"
                 class="dev.sweep.assistant.actions.FocusChatAction"
                 text="Add Selection to Sweep Agent">

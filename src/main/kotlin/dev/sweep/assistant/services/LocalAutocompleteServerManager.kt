@@ -58,14 +58,16 @@ class LocalAutocompleteServerManager : Disposable {
     private fun getPort(): Int =
         try {
             SweepSettings.getInstance().autocompleteLocalPort
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.warn("Failed to get autocomplete port: ${e.message}", e)
             DEFAULT_PORT
         }
 
     private fun getConfiguredRemoteUrl(): String? {
         val url = try {
             SweepSettings.getInstance().autocompleteRemoteUrl
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.warn("Failed to get remote URL: ${e.message}", e)
             null
         }
         return url?.takeIf { it.isNotBlank() }
@@ -213,8 +215,8 @@ class LocalAutocompleteServerManager : Disposable {
                             logger.info("Local autocomplete server: $line")
                         }
                     }
-                } catch (_: Exception) {
-                    // Process may have been closed
+                } catch (e: Exception) {
+                    logger.debug("Error reading server output (process may have been closed): ${e.message}")
                 }
             }
 

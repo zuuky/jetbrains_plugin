@@ -545,8 +545,8 @@ class Sweep :
                         return@invokeLater
                     }
                 }
-            } catch (_: Exception) {
-                // Silently fail - padding is nice-to-have
+            } catch (e: Exception) {
+                Logger.getInstance(Sweep::class.java).warn("Failed to adjust padding: ${e.message}", e)
             }
         }
     }

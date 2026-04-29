@@ -13,17 +13,8 @@ import dev.sweep.assistant.utils.detectShellName
 import dev.sweep.assistant.utils.detectShellPath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.BufferedReader
-import java.io.BufferedWriter
-import java.io.File
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.ThreadFactory
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
+import java.io.*
+import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -715,15 +706,18 @@ class BackgroundBashExecutor(
     private fun cleanupShell() {
         try {
             shellWriter?.close()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("Error closing shell writer: ${e.message}")
         }
         try {
             shellReader?.close()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("Error closing shell reader: ${e.message}")
         }
         try {
             shellProcess?.destroyForcibly()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("Error destroying shell process: ${e.message}")
         }
 
         shellWriter = null
@@ -1116,7 +1110,8 @@ class BackgroundBashExecutor(
 
         try {
             commandQueue.shutdownNow()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("Error shutting down command queue: ${e.message}")
         }
 
         synchronized(shellLock) {

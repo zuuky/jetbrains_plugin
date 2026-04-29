@@ -67,8 +67,8 @@ class ClipboardTrackingService(
                         lastClipboardEntry = ClipboardEntry(text)
                         lastClipboardContent = text
                     }
-                } catch (_: Exception) {
-                    // ignore non-text or transient clipboard errors
+                } catch (e: Exception) {
+                    logger.debug("Clipboard error: ${e.message}")
                 }
             }
 
@@ -100,7 +100,8 @@ class ClipboardTrackingService(
     private fun getClipboardContents(): String? =
         try {
             CopyPasteManager.getInstance().getContents(DataFlavor.stringFlavor)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("Failed to get clipboard contents: ${e.message}")
             null
         }
 

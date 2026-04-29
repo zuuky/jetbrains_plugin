@@ -2,6 +2,7 @@ package dev.sweep.assistant.views
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.IconLoader
@@ -10,13 +11,14 @@ import dev.sweep.assistant.data.IDEVersion
 import dev.sweep.assistant.services.StreamStateService
 import dev.sweep.assistant.utils.isIDEDarkMode
 import java.awt.*
-import java.awt.KeyboardFocusManager
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.JButton
 import javax.swing.Timer
 import kotlin.math.PI
 import kotlin.math.sin
+
+private val logger = Logger.getInstance(SendButtonFactory::class.java)
 
 object SendButtonFactory {
     class PulsingSvgButton(
@@ -217,7 +219,8 @@ object SendButtonFactory {
                 if (kfm.focusOwner === this) {
                     try {
                         this.transferFocus()
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        logger.debug("Failed to transfer focus: ${e.message}")
                     }
                     kfm.clearGlobalFocusOwner()
                 }

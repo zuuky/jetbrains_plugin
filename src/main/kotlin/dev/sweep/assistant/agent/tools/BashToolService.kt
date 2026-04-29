@@ -9,13 +9,7 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.ToolWindowManager
 import org.jetbrains.plugins.terminal.TerminalToolWindowFactory
 import org.jetbrains.plugins.terminal.TerminalToolWindowManager
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.Future
-import java.util.concurrent.ThreadFactory
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.*
 
 /**
  * Project-level service to manage BashTool state.
@@ -412,7 +406,8 @@ class BashToolService(
         // Shut down the queue
         try {
             commandQueue.shutdownNow()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("Error shutting down command queue: ${e.message}")
         }
         // Cancel all pending confirmations
         pendingConfirmations.values.forEach { future ->
@@ -450,7 +445,8 @@ class BashToolService(
         runningProcesses.values.forEach { process ->
             try {
                 process.destroyForcibly()
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                logger.debug("Error destroying process: ${e.message}")
             }
         }
         runningProcesses.clear()
@@ -460,14 +456,16 @@ class BashToolService(
             backgroundBashExecutors.values.forEach { executor ->
                 try {
                     Disposer.dispose(executor)
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    logger.debug("Error disposing bash executor: ${e.message}")
                 }
             }
             backgroundBashExecutors.clear()
             backgroundPowershellExecutors.values.forEach { executor ->
                 try {
                     Disposer.dispose(executor)
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    logger.debug("Error disposing powershell executor: ${e.message}")
                 }
             }
             backgroundPowershellExecutors.clear()

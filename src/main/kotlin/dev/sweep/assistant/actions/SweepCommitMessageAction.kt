@@ -1,5 +1,6 @@
 package dev.sweep.assistant.actions
 
+import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.progress.ProgressIndicator
@@ -22,17 +23,32 @@ class SweepCommitMessageAction : AnAction() {
         }
     }
 
+    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
     override fun update(e: AnActionEvent) {
         val project = e.project
         val presentation = e.presentation
 
-        if (project == null) {
+        if (project == null || project.isDisposed) {
             presentation.isEnabled = false
+            presentation.text = "Generate New Commit Message"
             return
         }
 
-        val service = SweepCommitMessageService.getInstance(project)
-        if (service.isGenerating) {
+        val commitMessage = e.getData(VcsDataKeys.COMMIT_MESSAGE_CONTROL)
+        if (commitMessage == null) {
+            presentation.isEnabled = false
+            presentation.text = "Generate New Commit Message"
+            return
+        }
+
+        val isGenerating = try {
+            SweepCommitMessageService.getInstance(project).isGenerating
+        } catch (e: Exception) {
+            false
+        }
+
+        if (isGenerating) {
             presentation.isEnabled = false
             presentation.text = "Generating..."
         } else {
@@ -43,34 +59,37 @@ class SweepCommitMessageAction : AnAction() {
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
-        val sweepCommitMessageService = SweepCommitMessageService.getInstance(project)
-        val sweepMetaData = SweepMetaData.getInstance()
-        sweepMetaData.commitMessageButtonClicks++
+        if (project.isDisposed) return
 
         val commitMessage = e.getData(VcsDataKeys.COMMIT_MESSAGE_CONTROL) as? CommitMessage ?: return
+
+        val sweepCommitMessageService = try {
+            SweepCommitMessageService.getInstance(project)
+        } catch (ex: Exception) {
+            return
+        }
+
+        if (sweepCommitMessageService.isGenerating) return
+
         val abstractCommitWorkflowHandler = e.getData(VcsDataKeys.COMMIT_WORKFLOW_HANDLER) as? AbstractCommitWorkflowHandler<*, *>
         val selectedChanges = abstractCommitWorkflowHandler?.ui?.getIncludedChanges() ?: emptyList()
         val unversionedFiles = abstractCommitWorkflowHandler?.ui?.getIncludedUnversionedFiles() ?: emptyList()
 
-        // Check again in case of race condition
-        if (sweepCommitMessageService.isGenerating) return
+        SweepMetaData.getInstance().commitMessageButtonClicks++
 
         ProgressManager.getInstance().run(
             object : Task.Backgroundable(project, "Generating Commit Message...", false) {
                 override fun run(indicator: ProgressIndicator) {
                     indicator.isIndeterminate = true
 
-                    // Detect partial changes (chunk-level selections)
                     val partialChanges = getPartialChanges(project, selectedChanges)
 
-                    // Pass both file-level changes AND chunk-level partial changes
                     sweepCommitMessageService.updateCommitMessage(
                         commitMessage,
                         selectedChanges = selectedChanges,
                         partialChanges = partialChanges,
                         unversionedFiles = unversionedFiles,
                         overrideCurrentMessage = true,
-                        ignoreDelay = true,
                     )
                 }
             },

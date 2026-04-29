@@ -2373,8 +2373,7 @@ class RecentEditsTracker(
 
             return result
         } catch (e: Exception) {
-            // println("Error fetching next edit autocomplete: ${e.message}")
-            e.printStackTrace()
+            logger.warn("Error fetching next edit autocomplete: ${e.message}")
 
             val stackTrace = e.stackTraceToString().take(500) // Limit stack trace length
             NotificationDeduplicationService.getInstance(project).showNotificationWithDeduplicationAndErrorReporting(

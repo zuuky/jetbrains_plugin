@@ -4,6 +4,7 @@ import com.intellij.ide.DataManager
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.PlatformDataKeys
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBTextArea
@@ -12,17 +13,15 @@ import dev.sweep.assistant.data.FileInfo
 import dev.sweep.assistant.theme.SweepColors
 import dev.sweep.assistant.utils.*
 import java.awt.*
-import java.awt.event.ActionEvent
-import java.awt.event.InputEvent
-import java.awt.event.KeyEvent
-import java.awt.event.MouseWheelEvent
-import java.awt.event.MouseWheelListener
+import java.awt.event.*
 import java.awt.geom.Rectangle2D
 import javax.swing.*
 import javax.swing.event.CaretListener
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 import javax.swing.text.Highlighter
+
+private val logger = Logger.getInstance(RoundedTextArea::class.java)
 
 open class RoundedTextArea(
     placeholder: String = "",
@@ -669,8 +668,8 @@ open class RoundedTextArea(
                             caretRect.bounds.height + buffer,
                         )
                     textArea.scrollRectToVisible(expandedRect)
-                } catch (_: Exception) {
-                    // Ignore if caret rect can't be computed
+                } catch (e: Exception) {
+                    logger.debug("Failed to scroll to caret: ${e.message}")
                 }
             }
         }

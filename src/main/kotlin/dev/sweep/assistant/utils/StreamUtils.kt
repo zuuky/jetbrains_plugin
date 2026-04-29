@@ -1,5 +1,6 @@
 package dev.sweep.assistant.utils
 
+import com.intellij.openapi.diagnostic.Logger
 import dev.sweep.assistant.data.UsernameResponse
 import dev.sweep.assistant.settings.SweepSettings
 import kotlinx.coroutines.Dispatchers
@@ -8,6 +9,8 @@ import kotlinx.serialization.json.Json
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
+
+private val logger = Logger.getInstance("StreamUtils")
 
 /**
  * Creates and configures an HTTP connection for making POST requests to the Sweep API.
@@ -102,7 +105,8 @@ suspend fun getUsername(): UsernameResponse? =
             val baseUrl = SweepSettings.getInstance().baseUrl
             // Skip requests to backend/ endpoints
             throw IOException("Skipping backend request: $baseUrl/backend/get_username (backend requests are disabled)")
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("getUsername skipped: ${e.message}")
             null
         }
     }

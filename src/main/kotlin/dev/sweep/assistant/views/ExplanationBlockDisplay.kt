@@ -3,6 +3,7 @@ package dev.sweep.assistant.views
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.ui.popup.PopupStep
@@ -25,10 +26,15 @@ import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.Point
 import java.io.File
-import javax.swing.*
+import javax.swing.Icon
+import javax.swing.JEditorPane
+import javax.swing.JTextPane
+import javax.swing.UIManager
 import javax.swing.event.HyperlinkEvent
 import javax.swing.event.HyperlinkListener
 import javax.swing.text.DefaultCaret
+
+private val logger = Logger.getInstance(ExplanationBlockDisplay::class.java)
 
 // Pre-compiled regex for table separator detection (e.g., |---|---|)
 private val TABLE_SEPARATOR_PATTERN = Regex("^\\s*\\|[-:\\s|]+\\|?\\s*$")
@@ -361,7 +367,8 @@ class ExplanationBlockDisplay(
         isDisposed = true
         try {
             textPane.removeHyperlinkListener(hyperlinkListener)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("Failed to remove hyperlink listener: ${e.message}")
         }
         currentEditorKit?.let { editorKit ->
             Disposer.dispose(editorKit)
@@ -405,7 +412,8 @@ class ExplanationBlockDisplay(
                     val symbolService = PsiSymbolService.getInstance(project)
                     preComputedSymbols = symbolService.preComputeSymbolsFromFiles(filePaths)
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                logger.debug("Failed to pre-compute symbols: ${e.message}")
             }
         }
     }
@@ -438,7 +446,8 @@ class ExplanationBlockDisplay(
                         repaint()
                     }
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                logger.debug("Failed to resolve links: ${e.message}")
             }
         }
     }

@@ -214,7 +214,8 @@ class SweepConfig(
             val reworkedUi =
                 try {
                     isMethod.invoke(null, "terminal.new.ui.reworked") as Boolean
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    logger.debug("Failed to check reworked UI: ${e.message}")
                     false
                 }
 
@@ -224,12 +225,14 @@ class SweepConfig(
                     val terminalEngineField = state.javaClass.getDeclaredField("terminalEngine")
                     terminalEngineField.isAccessible = true
                     terminalEngineField.get(state).toString().lowercase() != "classic"
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    logger.debug("Failed to check terminal engine: ${e.message}")
                     false
                 }
 
             newUi || reworkedUi || newTerminalEngine
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.warn("Failed to check new terminal UI: ${e.message}", e)
             false
         }
 

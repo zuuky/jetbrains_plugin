@@ -60,6 +60,9 @@ class SweepStartupActivity :
         @Volatile
         private var lastLogTime = 0L
         private val DEADLOCK_TIMEOUT_MS = 30_000L
+
+        @Volatile
+        private var deadlockCheckerScheduled = false
     }
 
     private fun logStep(step: String, detail: String = "") {
@@ -96,7 +99,11 @@ class SweepStartupActivity :
     }
 
     private fun scheduleDeadlockChecker() {
+        if (deadlockCheckerScheduled) return
+        deadlockCheckerScheduled = true
+
         AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            deadlockCheckerScheduled = false
             val elapsed = System.currentTimeMillis() - lastLogTime
             if (elapsed > DEADLOCK_TIMEOUT_MS) {
                 logger.error("[SweepStartup] DEADLOCK DETECTED! Last log was ${elapsed}ms ago. Dumping threads:")

@@ -10,6 +10,7 @@ import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
@@ -21,6 +22,8 @@ import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.util.Processor
 import dev.sweep.assistant.utils.relativePath
 import java.util.concurrent.Callable
+
+private val logger = Logger.getInstance(PsiSymbolService::class.java)
 
 /**
  * Service for PSI-based symbol resolution.
@@ -65,7 +68,8 @@ class PsiSymbolService(
                     },
                 ).expireWith(SweepProjectService.getInstance(project))
                 .executeSynchronously()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.warn("Failed to pre-compute symbols: ${e.message}", e)
             emptyMap()
         }
     }
@@ -99,8 +103,8 @@ class PsiSymbolService(
                     val match = createSymbolMatch(element, getSymbolType(element)) ?: continue
                     symbolMap.getOrPut(name) { mutableListOf() }.add(match)
                 }
-            } catch (_: Exception) {
-                // Skip files that can't be processed
+            } catch (e: Exception) {
+                logger.debug("Failed to process file: ${e.message}")
             }
         }
 
@@ -129,7 +133,8 @@ class PsiSymbolService(
                     },
                 ).expireWith(SweepProjectService.getInstance(project))
                 .executeSynchronously()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.warn("Failed to find symbols by name: ${e.message}", e)
             emptyList()
         }
     }
@@ -172,8 +177,8 @@ class PsiSymbolService(
                 },
                 true,
             )
-        } catch (_: Exception) {
-            // Silently handle errors
+        } catch (e: Exception) {
+            logger.debug("Failed to search symbols: ${e.message}")
         }
 
         return results

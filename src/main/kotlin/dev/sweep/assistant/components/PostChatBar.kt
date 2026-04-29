@@ -1,6 +1,7 @@
 package dev.sweep.assistant.components
 
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.components.JBLabel
@@ -15,6 +16,8 @@ import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.FlowLayout
 import javax.swing.JPanel
+
+private val logger = Logger.getInstance(PostChatBar::class.java)
 
 /**
  * A transparent container component that appears below the chat input area.
@@ -189,8 +192,8 @@ class PostChatBar(
                     }
                 }
             }
-        } catch (_: Exception) {
-            // Fall back to model ID if parsing fails
+        } catch (e: Exception) {
+            logger.debug("Failed to get model display name: ${e.message}")
         }
         return modelId
     }

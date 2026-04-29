@@ -3,6 +3,7 @@ package dev.sweep.assistant.components
 import com.intellij.icons.AllIcons
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.components.JBScrollPane
@@ -15,7 +16,6 @@ import dev.sweep.assistant.utils.*
 import dev.sweep.assistant.views.RoundedButton
 import dev.sweep.assistant.views.RoundedPanel
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import java.awt.BorderLayout
 import java.awt.CardLayout
@@ -24,6 +24,8 @@ import java.awt.Cursor
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
+
+private val logger = Logger.getInstance(WebSearchToolCallItem::class.java)
 
 @Serializable
 private data class Citation(
@@ -184,7 +186,8 @@ class WebSearchToolCallItem(
             } else {
                 emptyList()
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("Failed to parse citations: ${e.message}")
             emptyList()
         }
     }

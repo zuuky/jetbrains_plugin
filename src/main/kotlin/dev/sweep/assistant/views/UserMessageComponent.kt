@@ -229,7 +229,8 @@ class UserMessageComponent(
                 if (h.painter == messageHighlightPainter) {
                     try {
                         highlighter.removeHighlight(h)
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        logger.debug("Failed to remove highlight: ${e.message}")
                     }
                 }
             }
@@ -239,11 +240,12 @@ class UserMessageComponent(
             spans.forEach { span ->
                 try {
                     highlighter.addHighlight(span.start, span.end, messageHighlightPainter)
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    logger.debug("Failed to add highlight: ${e.message}")
                 }
             }
-        } catch (_: Exception) {
-            // Be resilient to any rendering exceptions
+        } catch (e: Exception) {
+            logger.warn("Error rendering message highlights: ${e.message}", e)
         }
     }
 

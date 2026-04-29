@@ -4,6 +4,7 @@ import com.intellij.ide.structureView.StructureViewTreeElement
 import com.intellij.ide.structureView.TreeBasedStructureViewBuilder
 import com.intellij.lang.LanguageStructureViewBuilder
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
@@ -24,6 +25,7 @@ import java.nio.file.Paths
 
 class ReadFileTool : SweepTool {
     companion object {
+        private val logger = Logger.getInstance(ReadFileTool::class.java)
         private const val TRUNCATION_LINES = 5
         private const val TRUNCATION_CHARS = 4000
         private const val TRUNCATION_MESSAGE = "\n\n... [truncated due to extremely large size of file or selection]"
@@ -398,7 +400,8 @@ class ReadFileTool : SweepTool {
                 finalResult.append(outlineContent)
 
                 return@runReadAction finalResult.toString()
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                logger.warn("Failed to get file outline: ${e.message}", e)
                 null
             }
         }
@@ -525,7 +528,8 @@ class ReadFileTool : SweepTool {
             } else {
                 null
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("Failed to get end line number: ${e.message}")
             null
         }
     }
@@ -545,7 +549,8 @@ class ReadFileTool : SweepTool {
             } else {
                 null
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("Failed to get line number: ${e.message}")
             null
         }
     }
@@ -607,7 +612,8 @@ class ReadFileTool : SweepTool {
             }
 
             null
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("Failed to get visibility modifier: ${e.message}")
             null
         }
     }

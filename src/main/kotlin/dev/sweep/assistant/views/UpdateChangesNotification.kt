@@ -3,6 +3,7 @@ package dev.sweep.assistant.views
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.components.JBPanel
@@ -22,6 +23,8 @@ import java.awt.Dimension
 import javax.swing.*
 import javax.swing.event.HyperlinkEvent
 import javax.swing.event.HyperlinkListener
+
+private val logger = Logger.getInstance("UpdateChangesNotification")
 
 class UpdateChangesNotification(
     private val project: Project,
@@ -267,7 +270,8 @@ class UpdateChangesNotification(
         // Ensure hyperlink listener is removed to prevent leaks
         try {
             contentPane.removeHyperlinkListener(contentHyperlinkListener)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.debug("Failed to remove hyperlink listener: ${e.message}")
         }
     }
 }

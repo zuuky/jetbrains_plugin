@@ -9,6 +9,7 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.RangeMarker
@@ -149,6 +150,10 @@ class PromptBarPanel(
     private val selectionEnd: Int,
 ) : JBPanel<PromptBarPanel>(BorderLayout()),
     Disposable {
+    companion object {
+        private val logger = Logger.getInstance(PromptBarPanel::class.java)
+    }
+
     val editorBg = EditorColorsManager.getInstance().globalScheme.defaultBackground
     private val promptPanelBG = if (isIDEDarkMode()) darken(editorBg, 0.1f) else lighten(editorBg, 0.1f)
     private val maxWidth = 500
@@ -1418,7 +1423,7 @@ class PromptBarPanel(
                     return@withContext
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                logger.warn("Server side error in cmd K session: ${e.message}", e)
                 val notification =
                     Notification(
                         "Sweep AI Notifications",
@@ -1683,7 +1688,7 @@ class PromptBarPanel(
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                logger.warn("Error setting followup mode: ${e.message}", e)
                 val notification =
                     Notification(
                         "Sweep AI Notifications",

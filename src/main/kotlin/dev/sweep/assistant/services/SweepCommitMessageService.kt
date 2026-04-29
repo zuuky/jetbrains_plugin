@@ -1,5 +1,7 @@
 package dev.sweep.assistant.services
 
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
@@ -20,7 +22,12 @@ import kotlinx.serialization.json.*
 import java.net.HttpURLConnection
 import java.net.URI
 import java.util.concurrent.CancellationException
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+
+class DiffTooLargeException(val diffTokens: Int, val maxTokens: Int) : Exception(
+    "Diff too large: $diffTokens tokens exceeds maximum $maxTokens tokens. Please reduce the number of files in this commit."
+)
 
 @Service(Service.Level.PROJECT)
 class SweepCommitMessageService(
@@ -85,6 +92,14 @@ class SweepCommitMessageService(
         } catch (_: CancellationException) {
             logger.debug("Commit message generation cancelled")
             generating.set(false)
+        } catch (e: DiffTooLargeException) {
+            generating.set(false)
+        } catch (e: TimeoutException) {
+            generating.set(false)
+            showErrorNotification(
+                "Request Timeout",
+                "Commit message generation timed out after 10 seconds. Please try again."
+            )
         } catch (e: Exception) {
             logger.warn("Error making API call", e)
             generating.set(false)
@@ -134,6 +149,15 @@ class SweepCommitMessageService(
 
         if (diffString.isBlank()) return ""
 
+        if (diffString.length > MAX_INPUT_TOKENS) {
+            generating.set(false)
+            showErrorNotification(
+                "Commit Message Too Large",
+                "Your changes contain ${diffString.length} tokens of diff, exceeding the $MAX_INPUT_TOKENS token limit. Please split into smaller commits."
+            )
+            throw DiffTooLargeException(diffString.length, MAX_INPUT_TOKENS)
+        }
+
         val previousCommitsString =
             if (!project.isDisposed && SweepConfig.getInstance(project).shouldUseCustomizedCommitMessages()) {
                 "Recent Commit Messages:\n" +
@@ -145,7 +169,7 @@ class SweepCommitMessageService(
             } else {
                 ""
             }
-// Optional user-provided commit message template
+        // Optional user-provided commit message template
         // Priority: Project-specific sweep-commit-template.md > Global ~/.sweep/sweep-commit-template.md
         val commitTemplate: String? =
             try {
@@ -159,8 +183,10 @@ class SweepCommitMessageService(
         val commitMessageModel = settings.commitMessageModel
 
         return try {
+
             if (commitMessageUrl.isNotBlank()) {
-                generateFromOpenAiCompatibleEndpoint(
+                logger.debug("Using OpenAI endpoint: $commitMessageUrl with model: $commitMessageModel")
+                val result = generateFromOpenAiCompatibleEndpoint(
                     commitMessageUrl = commitMessageUrl,
                     commitMessageModel = commitMessageModel,
                     token = settings.githubToken,
@@ -169,6 +195,12 @@ class SweepCommitMessageService(
                     previousCommitsString = previousCommitsString,
                     commitTemplate = commitTemplate,
                 )
+                if (result.isBlank()) {
+                    logger.warn("OpenAI endpoint returned empty response")
+                } else {
+                    logger.debug("Generated commit message: ${result.take(100)}...")
+                }
+                result
             } else {
                 generateFromSweepEndpoint(
                     diffString = diffString,
@@ -179,7 +211,7 @@ class SweepCommitMessageService(
                 )
             }
         } catch (e: Exception) {
-            logger.warn("Failed to generate commit message", e)
+            logger.warn("Failed to generate commit message: ${e.message}", e)
             ""
         }
     }
@@ -205,7 +237,7 @@ class SweepCommitMessageService(
 
         val userPrompt = buildString {
             append("Branch: $branch\n\n")
-            append("Diff:\n$diffString")
+            append("Diff:\n $diffString")
         }
 
         val requestBody = buildJsonObject {
@@ -285,6 +317,8 @@ class SweepCommitMessageService(
         parseResponse: (String) -> String,
     ): String {
         var connection: HttpURLConnection? = null
+        val startTime = System.currentTimeMillis()
+        val timeoutMs = 10_000L
         return try {
             connection = (URI(url).toURL().openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -300,13 +334,45 @@ class SweepCommitMessageService(
                 os.write(body.toByteArray())
                 os.flush()
             }
+            if (System.currentTimeMillis() - startTime > timeoutMs) {
+                throw TimeoutException("Request exceeded ${timeoutMs / 1000} second timeout")
+            }
+            val responseCode = connection.responseCode
+            if (responseCode !in 200..<300) {
+                val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "No error details"
+                logger.warn("HTTP $responseCode from $url: $errorBody")
+                return ""
+            }
             parseResponse(connection.inputStream.bufferedReader().use { it.readText() })
+        } catch (e: TimeoutException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Failed to call OpenAI endpoint: ${e.message}", e)
+            if (System.currentTimeMillis() - startTime > timeoutMs) {
+                throw TimeoutException("Request exceeded ${timeoutMs / 1000} second timeout")
+            }
+            ""
         } finally {
             connection?.disconnect()
         }
     }
 
+    private fun showErrorNotification(title: String, content: String) {
+        ApplicationManager.getApplication().invokeLater {
+            try {
+                NotificationGroupManager.getInstance()
+                    .getNotificationGroup("Sweep Commit Message")
+                    .createNotification(title, content, NotificationType.WARNING)
+                    .notify(project)
+            } catch (e: Exception) {
+                logger.warn("Failed to show notification: ${e.message}", e)
+            }
+        }
+    }
+
     companion object {
+        private const val MAX_INPUT_TOKENS = 100000
+
         private val logger = Logger.getInstance(SweepCommitMessageService::class.java)
 
         fun getInstance(project: Project): SweepCommitMessageService = project.getService(SweepCommitMessageService::class.java)

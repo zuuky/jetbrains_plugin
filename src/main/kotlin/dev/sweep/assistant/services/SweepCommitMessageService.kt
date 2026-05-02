@@ -125,7 +125,7 @@ class SweepCommitMessageService(
         // Check disposal status before generating diff
         if (project.isDisposed) return ""
 
-        val diffString =
+        var diffString =
             ProgressManager.getInstance().runProcess<String>(
                 {
                     val changesDiff =
@@ -150,15 +150,10 @@ class SweepCommitMessageService(
         if (diffString.isBlank()) return ""
 
         if (diffString.length > MAX_INPUT_TOKENS) {
-            generating.set(false)
-            showErrorNotification(
-                "Commit Message Too Large",
-                "Your changes contain ${diffString.length} tokens of diff, exceeding the $MAX_INPUT_TOKENS token limit. Please split into smaller commits."
-            )
-            throw DiffTooLargeException(diffString.length, MAX_INPUT_TOKENS)
+            diffString = diffString.take(MAX_INPUT_TOKENS)
         }
 
-        val previousCommitsString =
+        var previousCommitsString =
             if (!project.isDisposed && SweepConfig.getInstance(project).shouldUseCustomizedCommitMessages()) {
                 "Recent Commit Messages:\n" +
                     getRecentCommitMessages(project, maxCount = 20)
@@ -169,6 +164,10 @@ class SweepCommitMessageService(
             } else {
                 ""
             }
+
+        if (previousCommitsString.length > MAX_INPUT_TOKENS) {
+            previousCommitsString = previousCommitsString.take(MAX_INPUT_TOKENS)
+        }
         // Optional user-provided commit message template
         // Priority: Project-specific sweep-commit-template.md > Global ~/.sweep/sweep-commit-template.md
         val commitTemplate: String? =
@@ -318,7 +317,7 @@ class SweepCommitMessageService(
     ): String {
         var connection: HttpURLConnection? = null
         val startTime = System.currentTimeMillis()
-        val timeoutMs = 10_000L
+        val timeoutMs = 30_000L
         return try {
             connection = (URI(url).toURL().openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -371,7 +370,7 @@ class SweepCommitMessageService(
     }
 
     companion object {
-        private const val MAX_INPUT_TOKENS = 100000
+        private const val MAX_INPUT_TOKENS = 50000
 
         private val logger = Logger.getInstance(SweepCommitMessageService::class.java)
 

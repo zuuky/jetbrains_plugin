@@ -320,6 +320,8 @@ data class DiffInfo(
     val unifiedDiff: List<String>,
 )
 
+private const val MAX_DIFF_LINES = 500
+
 fun truncateDiff(
     diffInfo: DiffInfo,
     maxChars: Int,
@@ -412,6 +414,12 @@ fun generateDiffStringFromChanges(
                 patch,
                 2,
             )
+        // Skip files with too many diff lines (>500 lines)
+        if (unifiedDiff.size > MAX_DIFF_LINES) {
+            diffBuilder.append("Skipped large diff: $afterFileName (${unifiedDiff.size} diff lines exceeds $MAX_DIFF_LINES)\n\n")
+            return@forEach
+        }
+
         val changeTypeMessage =
             when (type) {
                 Change.Type.NEW -> "Added new file"

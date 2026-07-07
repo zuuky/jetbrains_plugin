@@ -257,6 +257,11 @@ class SweepCommitMessageService(
                 },
             )
             put("stream", false)
+            putJsonObject("extra_body") {
+                putJsonObject("chat_template_kwargs") {
+                    put("enable_thinking", false)
+                }
+            }
         }.toString()
 
         return postJson("$commitMessageUrl/v1/chat/completions", token, requestBody) { response ->

@@ -75,7 +75,9 @@ def next_edit_autocomplete(
                     **result.__dict__,
                     "elapsed_time_ms": int((time.time() - function_start_time) * 1000),
                 }
-                logger.debug(f"Next edit autocomplete took {data['elapsed_time_ms']}ms")
+                logger.debug(
+                    f"Next edit autocomplete took {data['elapsed_time_ms']}ms"
+                )
 
                 if multiple_suggestions:
                     data["completions"] = [

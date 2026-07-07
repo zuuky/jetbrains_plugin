@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import math
 import re
+import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field, replace
@@ -33,10 +36,7 @@ from sweep_autocomplete.autocomplete.next_edit_autocomplete_utils import (
     strip_leading_empty_newlines,
     truncate_long_lines,
 )
-from sweep_autocomplete.autocomplete.llm_local import (
-    generate_completion,
-    RequestCancelled,
-)
+from sweep_autocomplete.autocomplete.llm_local import generate_completion, RequestCancelled
 from sweep_autocomplete.config import NEXT_EDIT_AUTOCOMPLETE_ENDPOINT
 from sweep_autocomplete.dataclasses.file_chunk_data import (
     EditorDiagnostic,
@@ -52,19 +52,14 @@ NUM_LINES_AFTER = 5
 
 CHARS_PER_TOKEN = 3.5
 
-
 def estimate_token_count(text: str) -> int:
     """Estimate token count using character-based approximation."""
     return int(len(text) / CHARS_PER_TOKEN)
 
 
-MAX_INPUT_TOKENS_COUNT = (
-    8192 * 4
-) - 256  # ~8k tokens at 3.5 chars/token, fits in 32k ctx
+MAX_INPUT_TOKENS_COUNT = (8192 * 4) - 256  # ~8k tokens at 3.5 chars/token, fits in 32k ctx
 CHARACTER_BOUND_TO_CHECK_TOKENIZATION = (8192 * 2) - 256  # ~4k tokens
-CHARACTER_BOUND_TO_SKIP_TOKENIZATION = (
-    8192 * 4
-) * 2  # ~16k tokens, skip if clearly too long
+CHARACTER_BOUND_TO_SKIP_TOKENIZATION = (8192 * 4) * 2  # ~16k tokens, skip if clearly too long
 MAX_RETRIEVAL_CHUNK_SIZE_LINES = 25
 DEBUG = False
 # DEBUG = True
@@ -81,7 +76,6 @@ pretokenize_regex = regex.compile(PRETOKENIZE_REGEX)
 
 class PromptTruncationRecord(BaseModel):
     """Data container for prompt truncation logic. No S3 saving."""
-
     autocomplete_id: str = ""
     original_prompt_length: int = 0
     final_prompt_length: int = 0
@@ -384,7 +378,9 @@ def format_recent_changes_and_prev_section(
         # any_reverts_made = False
         for hunk in copied_hunks:
             first_line, *rest = hunk.splitlines(True)
-            file_path = first_line.removeprefix("File: ")
+            file_path = first_line.removeprefix(
+                "File: "
+            )
             old_code, new_code = extract_diff_parts("".join(rest))
             old_code_with_context, new_code_with_context = extract_diff_parts(
                 hunk, num_context_lines=1
@@ -856,9 +852,7 @@ def select_best_hunk_from_completion(
             for start_offset, end_offset, new_text in group:
                 # Add any unchanged text between hunks
                 if current_offset < start_offset:
-                    combined_text_parts.append(
-                        file_contents[current_offset:start_offset]
-                    )
+                    combined_text_parts.append(file_contents[current_offset:start_offset])
                 # Add the new text from this hunk
                 combined_text_parts.append(new_text)
                 current_offset = end_offset
@@ -917,7 +911,7 @@ def fetch_next_edits_http(
         raise Exception("Autocomplete service not available")
 
     # Use /v1/completions endpoint (OpenAI-compatible)
-    completions_endpoint = active_endpoint.rstrip("/") + "/v1/completions"
+    completions_endpoint = active_endpoint.rstrip('/') + '/v1/completions'
 
     try:
         response = session.post(
@@ -952,9 +946,7 @@ def fetch_next_edits_http(
             logprobs = []
 
         logger.info(f"Finish reason: {finish_reason}")
-        logger.info(
-            f"Accumulated response length: {len(accumulated_response)}, content: {accumulated_response[:200] if accumulated_response else 'EMPTY'}"
-        )
+        logger.info(f"Accumulated response length: {len(accumulated_response)}, content: {accumulated_response[:200] if accumulated_response else 'EMPTY'}")
 
         return (
             accumulated_response,
@@ -1311,19 +1303,21 @@ def _fetch_next_edits_core(
                         False,
                         metadata,
                     )
-                except Exception:
+                except Exception as e:
                     # Re-raise other exceptions
                     raise
         else:
             # Use local llama-cpp-python model
             with Timer("Autocomplete Local", precision=4):
                 try:
-                    completion, latency, logprobs, finish_reason = generate_completion(
-                        prompt=formatted_prompt,
-                        stop=stop,
-                        max_tokens=AUTOCOMPLETE_OUTPUT_MAX_TOKENS,
-                        temperature=0.0,
-                        prefix=forced_prefix,
+                    completion, latency, logprobs, finish_reason = (
+                        generate_completion(
+                            prompt=formatted_prompt,
+                            stop=stop,
+                            max_tokens=AUTOCOMPLETE_OUTPUT_MAX_TOKENS,
+                            temperature=0.0,
+                            prefix=forced_prefix,
+                        )
                     )
                 except RequestCancelled:
                     logger.info("Request cancelled by newer request")
@@ -1413,7 +1407,7 @@ def _fetch_next_edits_core(
         cleaned_code_block, completion, relative_cursor_position
     ):
         # Pure insertion above cursor detected, return empty completion
-        logger.warning("Pure insertion above cursor detected.")
+        logger.warning(f"Pure insertion above cursor detected.")
         metadata = replace(base_metadata, exit_reason="pure_insertion_above_cursor")
         return (
             [AutocompleteResult(0, 0, "", 0.0, autocomplete_id)],
@@ -1427,7 +1421,7 @@ def _fetch_next_edits_core(
         cleaned_code_block, completion, relative_cursor_position
     ):
         # Large diff above cursor detected (>5 lines added with >1 line deleted), return empty completion
-        logger.warning("Large diff above cursor detected.")
+        logger.warning(f"Large diff above cursor detected.")
         metadata = replace(base_metadata, exit_reason="large_diff_above_cursor")
         return (
             [AutocompleteResult(0, 0, "", 0.0, autocomplete_id)],
@@ -1460,6 +1454,7 @@ def _fetch_next_edits_core(
     #     logger.warning("Completion starts with cleaned code block and is in file contents.")
     #     completion = cleaned_code_block
 
+
     # # multi-line deletions are probably bugs so let's disable it.
     # if len(cleaned_code_block.splitlines()) - len(completion.splitlines()) > 2:
     #     completion = cleaned_code_block
@@ -1487,7 +1482,7 @@ def _fetch_next_edits_core(
     )
 
     if completion.strip("\n") == cleaned_code_block.strip("\n"):
-        logger.warning("No changes made")
+        logger.warning(f"No changes made")
         should_continue = not did_hit_max_tokens
         metadata = replace(base_metadata, exit_reason="no_changes_made")
         return (
@@ -1543,7 +1538,7 @@ def _fetch_next_edits_core(
         )
         if is_pure_whitespace_deleted:
             logger.warning(
-                "Current line is non-empty blank line and suggestion deletes pure whitespace at cursor position."
+                f"Current line is non-empty blank line and suggestion deletes pure whitespace at cursor position."
             )
             metadata = replace(base_metadata, exit_reason="pure_whitespace_deleted")
             return (
@@ -1765,7 +1760,7 @@ def should_disable_autocomplete(file_contents: str) -> tuple[bool, str]:
             sum(length_counter[length] for length in length_counter if length > 120)
             > num_lines * 0.3
         ):
-            return True, "30% of lines are > 120 chars"
+            return True, f"30% of lines are > 120 chars"
 
         hash_lines = sum(
             1
@@ -1775,7 +1770,7 @@ def should_disable_autocomplete(file_contents: str) -> tuple[bool, str]:
         percentage_hash_lines = (hash_lines / num_lines) * 100 if num_lines > 0 else 0
 
         if percentage_hash_lines > 10:
-            return True, "10% of lines are hashes"
+            return True, f"10% of lines are hashes"
 
     return False, ""
 
@@ -1795,7 +1790,7 @@ def fetch_next_edits(
     editor_diagnostics: list[EditorDiagnostic] = None,
 ):
     if is_new_user:
-        logger.debug("New user detected, disabling changes_above_cursor")
+        logger.debug(f"New user detected, disabling changes_above_cursor")
         changes_above_cursor = False
 
     # Check if autocomplete should be disabled based on file characteristics
@@ -1821,13 +1816,15 @@ def fetch_next_edits(
     if file_chunks is None:
         file_chunks = []
 
-    cursor_position = adjust_cursor_position_from_utf16(file_contents, cursor_position)
+    cursor_position = adjust_cursor_position_from_utf16(
+        file_contents, cursor_position
+    )
     code_block, prefix, suffix, block_start_index = get_block_at_cursor(
         file_contents, cursor_position
     )
 
     if should_disable_for_code_block(code_block):
-        logger.debug("Disabling autocomplete: long lines")
+        logger.debug(f"Disabling autocomplete: long lines")
         autocomplete_id = uuid.uuid4().hex
         yield (
             AutocompleteResult(0, 0, "", 0, autocomplete_id),
@@ -1909,11 +1906,7 @@ def fetch_next_edits(
         # if diagnostic, pass it in as an additional retrieval chunk
         if diagnostic:
             file_contents_lines = file_contents.splitlines()
-            diagnostic_line = (
-                file_contents_lines[diagnostic.line_number]
-                if diagnostic.line_number < len(file_contents_lines)
-                else ""
-            )
+            diagnostic_line = file_contents_lines[diagnostic.line_number] if diagnostic.line_number < len(file_contents_lines) else ""
             # add it as the first one
             retrieval_chunks = [
                 FileChunkData(
@@ -1955,7 +1948,7 @@ def fetch_next_edits(
     )
 
     if should_disable_for_code_block(full_block):
-        logger.debug("Disabling autocomplete: long lines")
+        logger.debug(f"Disabling autocomplete: long lines")
         autocomplete_id = uuid.uuid4().hex
         yield (
             AutocompleteResult(0, 0, "", 0, autocomplete_id),

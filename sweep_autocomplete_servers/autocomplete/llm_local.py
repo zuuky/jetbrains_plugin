@@ -1,12 +1,11 @@
+import os
 import threading
 import time
 from typing import Any
 
-from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
 from llama_cpp.llama_speculative import LlamaPromptLookupDecoding
 
-from sweep_autocomplete.config import MODEL_REPO, MODEL_FILENAME
 from loguru import logger
 
 _model: Llama | None = None
@@ -15,27 +14,76 @@ _request_lock = threading.Lock()
 _latest_request_id = 0
 
 
+def _read_env_int(key: str, default: int) -> int:
+    """Read an integer from environment variable."""
+    val = os.environ.get(key)
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        return default
+
+
+def _read_env_bool(key: str, default: bool = False) -> bool:
+    """Read a boolean from environment variable."""
+    val = os.environ.get(key)
+    if val is None:
+        return default
+    return val.lower() in ("1", "true", "yes", "on")
+
+
 class RequestCancelled(Exception):
     """Raised when a queued request is superseded by a newer one."""
-
     pass
 
 
 def get_model() -> Llama:
     global _model
     if _model is None:
-        logger.info(f"Downloading model {MODEL_FILENAME} from {MODEL_REPO}")
-        model_path = hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILENAME)
+        model_path = os.environ.get("MODEL_PATH", "")
+        if not model_path:
+            raise ValueError("MODEL_PATH environment variable is not set")
+
         logger.info(f"Loading model from {model_path}")
-        _model = Llama(
+
+        n_ctx = _read_env_int("LOCAL_MODEL_N_CTX", 16384)
+        n_batch = _read_env_int("LOCAL_MODEL_N_BATCH", 2048)
+        n_gpu_layers = _read_env_int("LOCAL_MODEL_N_GPU_LAYERS", -1)
+        n_threads = _read_env_int("LOCAL_MODEL_N_THREADS", 8)
+        n_threads_batch = _read_env_int("LOCAL_MODEL_N_THREADS_BATCH", 16)
+        n_ubatch = _read_env_int("LOCAL_MODEL_N_UBATCH", 1024)
+        draft_tokens = _read_env_int("LOCAL_MODEL_DRAFT_TOKENS", 32)
+
+        flash_attn = _read_env_bool("LOCAL_MODEL_FLASH_ATTN", True)
+        use_mmap = _read_env_bool("LOCAL_MODEL_USE_MMAP", True)
+        use_mlock = _read_env_bool("LOCAL_MODEL_USE_MLOCK", False)
+        logits_all = _read_env_bool("LOCAL_MODEL_LOGITS_ALL", True)
+        use_draft = _read_env_bool("LOCAL_MODEL_USE_DRAFT", True)
+        offload_kqv = _read_env_bool("LOCAL_MODEL_OFFLOAD_KQV", True)
+        mul_mat_q = _read_env_bool("LOCAL_MODEL_MUL_MAT_Q", True)
+
+        logger.info(f"Model config: n_ctx={n_ctx}, n_batch={n_batch}, n_gpu_layers={n_gpu_layers}")
+        logger.info(f"flash_attn={flash_attn}, use_draft={use_draft}, logits_all={logits_all}")
+
+        model_kwargs = dict(
             model_path=model_path,
-            n_ctx=16384,
-            n_batch=4096,
-            n_gpu_layers=-1,
-            flash_attn=True,
-            draft_model=LlamaPromptLookupDecoding(num_pred_tokens=32),
-            logits_all=True,
+            n_ctx=n_ctx,
+            n_batch=n_batch,
+            n_gpu_layers=n_gpu_layers,
+            flash_attn=flash_attn,
+            logits_all=logits_all,
+            use_mmap=use_mmap,
+            use_mlock=use_mlock,
+            n_threads=n_threads,
+            n_threads_batch=n_threads_batch,
+            n_ubatch=n_ubatch,
         )
+
+        if use_draft and draft_tokens > 0:
+            model_kwargs["draft_model"] = LlamaPromptLookupDecoding(num_pred_tokens=draft_tokens)
+
+        _model = Llama(**model_kwargs)
         logger.info("Model loaded successfully")
     return _model
 
@@ -73,9 +121,7 @@ def generate_completion(
             raise RequestCancelled()
 
         tokens = model.tokenize(full_prompt.encode("utf-8"))
-        logger.info(
-            f"Prompt length: {len(full_prompt)} chars, {len(tokens)} tokens, n_ctx={model.n_ctx()}"
-        )
+        logger.info(f"Prompt length: {len(full_prompt)} chars, {len(tokens)} tokens, n_ctx={model.n_ctx()}")
 
         start = time.time()
         result = model.create_completion(

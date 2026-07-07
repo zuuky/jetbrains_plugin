@@ -19,15 +19,15 @@ HOST="${2:-0.0.0.0}"
 PORT="${3:-8006}"
 
 # ----------------------
-# Tunables (edit here)
+# Enables (edit here)
 # ----------------------
 : "${MODEL_PROFILE:=quality}" # latency | quality
 # Service behavior
 : "${ENABLE_RETRIEVAL_FALLBACK:=true}"
-: "${NEXT_EDIT_AUTOCOMPLETE_ENDPOINT:=}"
+#: "${NEXT_EDIT_AUTOCOMPLETE_ENDPOINT:=}"
 : "${MODEL_PATH:=/root/.cache/modelscope/hub/models/sweepai/sweep-next-edit-1.5B/sweep-next-edit-1.5b.q8_0.v2.gguf}"
 #: "${MODEL_PATH:=/root/.cache/modelscope/hub/models/sweepai/sweep-next-edit-0.5B/sweep-next-edit-0.5b.q8_0.gguf}"
-: "${MODEL_FILENAME:=sweep-next-edit-0.5b.q8_0.gguf}"
+#: "${MODEL_FILENAME:=sweep-next-edit-0.5b.q8_0.gguf}"
 : "${LOG_MODEL_PROMPT:=true}"
 : "${LOG_MODEL_RAW_OUTPUT:=true}"
 : "${MODEL_LOG_MAX_CHARS:=0}"
@@ -68,11 +68,11 @@ else
 fi
 
 # Dependency/bootstrap behavior
-: "${INSTALL_DEPS_ON_START:=false}"
-: "${FORCE_REINSTALL_DEPS:=false}"
-: "${LLAMA_CUDA_BUILD:=false}"
-: "${LLAMA_FORCE_REBUILD:=false}"
-: "${LLAMA_AUTO_REBUILD_IF_NO_GPU:=true}"
+: "${INSTALL_DEPS_ON_START:=true}"
+: "${FORCE_REINSTALL_DEPS:=true}"
+: "${LLAMA_CUDA_BUILD:=true}"
+: "${LLAMA_FORCE_REBUILD:=true}"
+: "${LLAMA_AUTO_REBUILD_IF_NO_GPU:=false}"
 : "${LLAMA_CMAKE_ARGS:=-DGGML_CUDA=on}"
 
 export ENABLE_RETRIEVAL_FALLBACK
@@ -116,7 +116,16 @@ ensure_venv() {
   mkdir -p "$LOG_DIR"
   if [ ! -x "$PYTHON_EXE" ]; then
     echo "[1/4] Creating uv virtualenv..."
-    uv venv --seed "$VENV_DIR" >/dev/null
+    if [ -d "$VENV_DIR" ]; then
+      # venv exists but python is missing/broken - recreate non-interactively
+      UV_VENV_CLEAR=1 uv venv --seed "$VENV_DIR" 2>&1 || {
+        echo "[1/4] Failed to recreate venv, trying cleanup..."
+        rm -rf "$VENV_DIR"
+        uv venv --seed "$VENV_DIR" 2>&1
+      }
+    else
+      uv venv --seed "$VENV_DIR" 2>&1
+    fi
   fi
 }
 
@@ -152,22 +161,8 @@ ensure_pip_module() {
 }
 
 install_base_deps() {
-  echo "[2/4] Installing base dependencies..."
-  uv pip install --python "$PYTHON_EXE" \
-    fastapi \
-    uvicorn \
-    httptools \
-    loguru \
-    requests \
-    regex \
-    pydantic \
-    numpy \
-    scipy \
-    brotli \
-    openai \
-    distro \
-    jiter \
-    sniffio >/dev/null
+  echo "[2/4] Installing base dependencies from pyproject.toml..."
+  uv pip install --python "$PYTHON_EXE" -e . >/dev/null
 }
 
 install_llama_build_deps() {
@@ -312,7 +307,7 @@ start_server() {
 
   echo "[4/4] Starting service at http://$HOST:$PORT"
   (
-    nohup env CUDA_VISIBLE_DEVICES=0 uv run --python "$PYTHON_EXE" python -m cli --host "$HOST" --port "$PORT" >>"$LOG_FILE" 2>&1 &
+    nohup env CUDA_VISIBLE_DEVICES=0 uv run --python "$PYTHON_EXE" python -m sweep_autocomplete.cli --host "$HOST" --port "$PORT" >>"$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
   )
 

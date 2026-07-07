@@ -4,6 +4,8 @@ import difflib
 import re
 from functools import lru_cache
 
+import numpy as np
+from scipy.sparse import csr_matrix
 
 from sweep_autocomplete.autocomplete.next_edit_autocomplete_utils import (
     extract_diff_parts,
@@ -90,8 +92,16 @@ def extract_added_and_deleted_from_hunk(
             original_deleted_words.extend(old_words[i1:i2])
         if tag in ("replace", "insert"):
             original_added_words.extend(new_words[j1:j2])
-    added_words = [word for word in original_added_words if len(word) > 1]
-    deleted_words = [word for word in original_deleted_words if len(word) > 1]
+    added_words = [
+        word
+        for word in original_added_words
+        if len(word) > 1
+    ]
+    deleted_words = [
+        word
+        for word in original_deleted_words
+        if len(word) > 1
+    ]
     added_words = list(set(added_words))
     deleted_words = list(set(deleted_words))
     logger.info(
@@ -216,9 +226,7 @@ def find_best_matching_block(
         file_tokens = [token for token, _, _ in file_tokens_with_offsets]
 
     with Timer(
-        min_time=0.001,
-        precision=3,
-        name="extract_added_and_deleted_code_from_recent_changes",
+            min_time=0.001, precision=3, name="extract_added_and_deleted_code_from_recent_changes"
     ):
         added_words, deleted_words = extract_added_and_deleted_code_from_recent_changes(
             recent_changes, set(file_tokens)
@@ -237,19 +245,9 @@ def find_best_matching_block(
         query_token = deleted_words[0]
     else:
         for word in added_words:
-            query_token_line_numbers = [
-                get_line_number_from_position(file_contents, offset)
-                for token, offset, _ in file_tokens_with_offsets
-                if token == word
-            ]
-            if (
-                word in file_tokens
-                and 5 >= file_tokens.count(word) > 1
-                and any(
-                    abs(line_number - current_cursor_line_number) > 10
-                    for line_number in query_token_line_numbers
-                )
-            ):
+            query_token_line_numbers = [get_line_number_from_position(file_contents, offset) for token, offset, _ in file_tokens_with_offsets if token == word]
+            if word in file_tokens and 5 >= file_tokens.count(word) > 1 and \
+                    any(abs(line_number - current_cursor_line_number) > 10 for line_number in query_token_line_numbers):
                 query_token = word
                 break
         else:
@@ -258,14 +256,7 @@ def find_best_matching_block(
     # find the closest match in file_tokens
     # get all indices in file_contents which match the query_token
     query_token_offsets = [
-        offset
-        for token, offset, _ in file_tokens_with_offsets
-        if token == query_token
-        and abs(
-            get_line_number_from_position(file_contents, offset)
-            - current_cursor_line_number
-        )
-        > 10
+        offset for token, offset, _ in file_tokens_with_offsets if token == query_token and abs(get_line_number_from_position(file_contents, offset) - current_cursor_line_number) > 10
     ]
 
     closest_error = None

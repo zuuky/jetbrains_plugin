@@ -51,14 +51,8 @@ object SweepSettingsParser {
                     (descriptor.pluginPath?.toString()?.contains("/distributions/") == true)
             } ?: false
 
-        // Developer mode is enabled if either:
-        // 1. Plugin was installed from disk (development environment), OR
-        // 2. User manually enabled developer mode toggle (enterprise only)
-        return !isCloudEnvironment() &&
-            (
-                isInstalledFromDisk ||
-                    SweepSettings.getInstance().developerModeOn
-            )
+        // Developer mode is enabled when the plugin was installed from disk (development environment)
+        return !isCloudEnvironment() && isInstalledFromDisk
     }
 
     fun isGatewayMode(): Boolean = SweepConstants.GATEWAY_MODE != null

@@ -6,43 +6,36 @@ import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.openapi.project.Project
-import com.intellij.util.concurrency.AppExecutorUtil
 import com.intellij.util.messages.Topic
 import com.intellij.util.xmlb.XmlSerializerUtil
-import dev.sweep.assistant.tracking.EventType
-import dev.sweep.assistant.tracking.TelemetryService
 
-data class CustomPrompt(
-    var name: String = "",
-    var prompt: String = "",
-    var includeSelectedCode: Boolean = true,
-)
-
-data class BYOKProviderConfig(
-    var apiKey: String = "",
-    var eligibleModels: List<String> = emptyList(),
-)
-
+/**
+ * Application-level settings for the local autocomplete (next-edit) plugin and
+ * LLM-backed commit message generation.
+ *
+ * Stores:
+ * - next-edit autocomplete preferences (enabled, debounce, accept behavior, badge)
+ * - next-edit server configuration (local port / remote URL)
+ * - commit message LLM configuration (URL + model)
+ * - autocomplete exclusion patterns
+ */
 @State(
     name = "dev.sweep.jetbrains.settings.SweepSettings",
     storages = [Storage("SweepSettings.xml")],
 )
 class SweepSettings : PersistentStateComponent<SweepSettings> {
     companion object {
-        private const val DEFAULT_GITHUB_TOKEN = ""
-        private const val DEFAULT_SWEEP_URL = ""
-        private const val DEFAULT_BETA_FLAG_ON = false
         private const val DEFAULT_NEXT_EDIT_PREDICTION_ON = true
         private const val DEFAULT_ACCEPT_WORD_ON_RIGHT_ARROW = true
-        private const val DEFAULT_ANTHROPIC_API_KEY = ""
-        private const val DEFAULT_PLAY_NOTIFICATION_ON_STREAM_END = false
-        private const val DEFAULT_DEVELOPER_MODE_ON = false
-
-        // -1L means "unset" so project-level values can migrate in
-        private const val DEFAULT_AUTOCOMPLETE_DEBOUNCE_MS = -1L
-
-        // Default to false - do not automatically disable conflicting autocomplete plugins
         private const val DEFAULT_DISABLE_CONFLICTING_PLUGINS = true
+
+        // -1L means "unset" so project-level values from older versions can migrate in
+        private const val DEFAULT_AUTOCOMPLETE_DEBOUNCE_MS = -1L
+        private const val DEFAULT_DEBOUNCE_MS = 10L
+
+        const val DEFAULT_AUTOCOMPLETE_PORT = 8006
+        const val DEFAULT_COMMIT_MESSAGE_URL = "http://10.218.230.4:8015"
+        const val DEFAULT_COMMIT_MESSAGE_MODEL = "general-model"
 
         fun getInstance(): SweepSettings = ApplicationManager.getApplication().getService(SweepSettings::class.java)
     }
@@ -60,46 +53,7 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
         }
     }
 
-    var githubToken: String = DEFAULT_GITHUB_TOKEN
-        get() = field.trim()
-        set(value) {
-            if (isLoadingState) {
-                field = value
-                return
-            }
-            if (value != field) {
-                field = value // make sure you report recent data
-                notifySettingsChanged()
-                sendTelemetryLater(EventType.USER_AUTHENTICATED)
-            } else {
-                field = value
-            }
-        }
-
-    var baseUrl: String = DEFAULT_SWEEP_URL
-        get() =
-            if (SweepSettingsParser.isCloudEnvironment()) {
-                SweepEnvironmentConstants.Defaults.DEFAULT_BASE_URL
-            } else {
-                field.trim().trimEnd('/')
-            }
-        set(value) {
-            if (isLoadingState) {
-                field = value
-                return
-            }
-            if (value != field) {
-                field = value
-                notifySettingsChanged()
-            } else {
-                field = value
-            }
-        }
-
-    var betaFlagOn: Boolean = DEFAULT_BETA_FLAG_ON
-        set(value) {
-            field = value
-        }
+    /// Next-edit (autocomplete) preferences
 
     var nextEditPredictionFlagOn: Boolean = DEFAULT_NEXT_EDIT_PREDICTION_ON
         set(value) {
@@ -110,10 +64,6 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
             if (value != field) {
                 field = value
                 notifySettingsChanged()
-                // Send telemetry when autocomplete is disabled
-                if (!value) {
-                    sendTelemetryLater(EventType.AUTOCOMPLETE_DISABLED)
-                }
             } else {
                 field = value
             }
@@ -133,27 +83,9 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
             }
         }
 
-    var anthropicApiKey: String = DEFAULT_ANTHROPIC_API_KEY
-        get() = field.trim()
-        set(value) {
-            field = value
-        }
-
-    var playNotificationOnStreamEnd: Boolean = DEFAULT_PLAY_NOTIFICATION_ON_STREAM_END
-        set(value) {
-            field = value
-        }
-
-    var developerModeOn: Boolean = DEFAULT_DEVELOPER_MODE_ON
-        set(value) {
-            field = value
-        }
-
     /**
-     * Autocomplete debounce delay in milliseconds.
-     * This is stored at the application level and applies to all projects.
-     * A value of -1 indicates "unset" and allows a one-time migration from any existing
-     * project-level setting in SweepConfig when first accessed.
+     * Autocomplete debounce delay in milliseconds (applies to all projects).
+     * A value <= 0 means "unset" and the effective default (10ms) is used.
      */
     var autocompleteDebounceMs: Long = DEFAULT_AUTOCOMPLETE_DEBOUNCE_MS
         set(value) {
@@ -163,9 +95,12 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
             // excessive message bus chatter while the user drags the slider.
         }
 
+    /** Returns the effective debounce delay in milliseconds. */
+    fun getEffectiveDebounceMs(): Long =
+        if (autocompleteDebounceMs <= 0L) DEFAULT_DEBOUNCE_MS else autocompleteDebounceMs
+
     /**
-     * Automatically disable conflicting autocomplete plugins.
-     * This is stored at the application level and applies to all projects.
+     * Automatically disable conflicting autocomplete plugins (e.g. Copilot, Tabnine).
      */
     var disableConflictingPlugins: Boolean = DEFAULT_DISABLE_CONFLICTING_PLUGINS
         set(value) {
@@ -181,116 +116,73 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
             }
         }
 
-    var customPrompts: MutableList<CustomPrompt> = mutableListOf()
-        set(value) {
-            if (isLoadingState) {
-                field = value
-                return
-            }
-            field = value
-            notifySettingsChanged()
-        }
-
-    var hasInitializedDefaultPrompts: Boolean = false
-
-    /**
-     * BYOK (Bring Your Own Key) provider configurations.
-     * This is stored at the application level and applies to all projects.
-     * Map of provider name -> BYOKProviderConfig (apiKey, eligibleModels)
-     */
-    var byokProviderConfigs: MutableMap<String, BYOKProviderConfig> = mutableMapOf()
-        set(value) {
-            field = value
-            // Don't notify settings changed for BYOK to avoid excessive chatter
-        }
+    /// Server configuration for next-edit
 
     var autocompleteLocalMode: Boolean = true
 
-    var autocompleteLocalPort: Int = 8006
+    var autocompleteLocalPort: Int = DEFAULT_AUTOCOMPLETE_PORT
 
     /**
-     * Remote autocomplete server URL (e.g. http://gpu-server).
+     * Remote autocomplete server URL (e.g. http://gpu-server:8006).
      * When set and autocompleteLocalMode is true, connects to this URL
      * instead of starting a local uvx sweep-autocomplete process.
      */
     var autocompleteRemoteUrl: String = "http://10.218.230.4:$autocompleteLocalPort"
 
+    /** Returns the effective autocomplete server URL. Priority: remote URL > localhost. */
+    fun getEffectiveAutocompleteUrl(): String {
+        val remoteUrl = autocompleteRemoteUrl.trim()
+        if (remoteUrl.isNotBlank()) return remoteUrl
+        return "http://localhost:$autocompleteLocalPort"
+    }
+
+    /// Commit message LLM configuration
+
     /**
      * Custom LLM URL for commit message generation (e.g. http://llm-server:8000).
-     * When set, this URL is used as the base for create_commit_message API calls.
+     * When set, this URL is used as the base for OpenAI-compatible /v1/chat/completions.
      */
-    var commitMessageUrl: String = "http://10.218.230.4:8015"
+    var commitMessageUrl: String = DEFAULT_COMMIT_MESSAGE_URL
 
     /**
      * Model name for commit message generation.
-     * When set, this value is passed alongside the commit message request.
      */
-    var commitMessageModel: String = "general-model"
+    var commitMessageModel: String = DEFAULT_COMMIT_MESSAGE_MODEL
 
-    fun ensureDefaultPromptsInitialized() {
-        var addedPrompt = false
+    /// Next-edit UI preferences
 
-        if (customPrompts.none { it.name == "AI Code Review" }) {
-            customPrompts.add(
-                CustomPrompt(
-                    name = "AI Code Review",
-                    prompt = "Review each of the changes in detail for potential bugs",
-                    includeSelectedCode = false,
-                ),
-            )
-            addedPrompt = true
-        }
+    // Show the "Tab to accept" badge next to ghost text / popup suggestions
+    var showAutocompleteBadge: Boolean = false
 
-        if (customPrompts.none { it.name == "Explain Code" }) {
-            customPrompts.add(
-                CustomPrompt(
-                    name = "Explain Code",
-                    prompt = "Explain what the code does.",
-                    includeSelectedCode = true,
-                ),
-            )
-            addedPrompt = true
-        }
+    // Autocomplete exclusion patterns - files matching these patterns won't trigger autocomplete.
+    // v2 is additive; the getter merges v1 and v2 so existing users keep their patterns and get .env added.
+    var autocompleteExclusionPatterns: Set<String> = emptySet()
 
-        if (customPrompts.none { it.name == "Write Documentation" }) {
-            customPrompts.add(
-                CustomPrompt(
-                    name = "Write Documentation",
-                    prompt = "Please write documentation for the highlighted code.",
-                    includeSelectedCode = true,
-                ),
-            )
-            addedPrompt = true
-        }
+    var autocompleteExclusionPatternsV2: Set<String> = setOf(".env")
 
-        if (addedPrompt) {
-            // Trigger state save by creating a new list instance to change the reference
-            customPrompts = customPrompts.toMutableList()
-        }
+    fun allAutocompleteExclusionPatterns(): Set<String> =
+        autocompleteExclusionPatterns + autocompleteExclusionPatternsV2
 
-        if (!hasInitializedDefaultPrompts || addedPrompt) {
-            hasInitializedDefaultPrompts = true
-        }
+    fun updateAutocompleteExclusionPatterns(patterns: Set<String>) {
+        autocompleteExclusionPatternsV2 = patterns
+        autocompleteExclusionPatterns = emptySet()
     }
 
-    val useLocalMode: Boolean
-        get() = SweepSettingsParser.isCloudEnvironment() && anthropicApiKey.isNotEmpty()
+    // Whether to hide the autocomplete exclusion banner (user clicked "Don't show again")
+    var hideAutocompleteExclusionBanner: Boolean = false
+
+    /// Commit message customization
+
+    // Include recent commit messages as style reference when generating a commit message
+    var useCustomizedCommitMessages: Boolean = true
 
     /**
-     * Determines if the user has configured Sweep settings if either:
-     * 1. Both GitHub token and base URL have been set to non-default values, OR
-     * 2. An Anthropic API key has been provided
+     * Determines if the plugin is considered "configured".
+     * For this local build, settings are always considered set as long as
+     * next-edit autocomplete is enabled.
      */
     val hasBeenSet: Boolean
-        get() {
-            // If autocomplete is configured with a remote URL, consider settings as set
-            if (autocompleteLocalMode && autocompleteRemoteUrl.isNotBlank()) return true
-            return if (SweepSettingsParser.isCloudEnvironment()) {
-                githubToken != DEFAULT_GITHUB_TOKEN
-            } else {
-                githubToken != DEFAULT_GITHUB_TOKEN && baseUrl != DEFAULT_SWEEP_URL
-            }
-        }
+        get() = true
 
     fun notifySettingsChanged() {
         ApplicationManager.getApplication().invokeLater {
@@ -299,14 +191,6 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
                 ?.messageBus
                 ?.syncPublisher(SettingsChangedNotifier.TOPIC)
                 ?.settingsChanged()
-        }
-    }
-
-    private fun sendTelemetryLater(eventType: EventType) {
-        AppExecutorUtil.getAppExecutorService().execute {
-            runCatching {
-                TelemetryService.getInstance().sendUsageEvent(eventType)
-            }
         }
     }
 
@@ -324,10 +208,6 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
         )
     }
 
-    fun initiateGitHubAuth(project: Project) {
-        GitHubAuthHandler.initiateAuth(project)
-    }
-
     override fun getState(): SweepSettings = this
 
     override fun loadState(state: SweepSettings) {
@@ -337,7 +217,5 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
         } finally {
             isLoadingState = false
         }
-        // Initialize default prompts after loading state
-        ensureDefaultPromptsInitialized()
     }
 }

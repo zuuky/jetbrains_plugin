@@ -5,20 +5,8 @@ import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
-import com.intellij.openapi.diagnostic.IdeaLoggingEvent
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
-import com.intellij.util.concurrency.annotations.RequiresBackgroundThread
-import dev.sweep.assistant.settings.SweepSettings
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
-import javax.swing.JPanel
 
 /**
  * Service that handles deduplication of notifications to prevent spam.
@@ -33,36 +21,6 @@ class NotificationDeduplicationService(
             project.getService(NotificationDeduplicationService::class.java)
 
         private const val TOKEN_OVERLAP_THRESHOLD = 0.8 // 80% token overlap threshold
-
-        /**
-         * Checks if the backend health endpoint is reachable.
-         * Returns true if backend is reachable, false if there are network/connectivity issues.
-         */
-        @RequiresBackgroundThread
-        private fun isBackendHealthy(): Boolean =
-            try {
-                runBlocking {
-                    withTimeoutOrNull(2000) {
-                        val baseUrl = SweepSettings.getInstance().baseUrl
-                        val httpClient =
-                            HttpClient
-                                .newBuilder()
-                                .connectTimeout(Duration.ofSeconds(3))
-                                .build()
-                        val request =
-                            HttpRequest
-                                .newBuilder()
-                                .uri(URI.create(baseUrl))
-                                .timeout(Duration.ofSeconds(3))
-                                .GET()
-                                .build()
-                        val response = httpClient.send(request, HttpResponse.BodyHandlers.discarding())
-                        response.statusCode() in 200..299
-                    } ?: false
-                }
-            } catch (e: Exception) {
-                false
-            }
 
         /**
          * Creates user-friendly error messages for common HTTP and other errors.
@@ -246,40 +204,15 @@ class NotificationDeduplicationService(
         // Store this notification for future deduplication
         shownNotifications.add(newRecord)
 
-        // If we have a user-friendly message, show it to the user
-        if (userFriendlyMessage != null) {
-            // Show the user-friendly notification
-            ApplicationManager.getApplication().invokeLater {
-                if (!isDisposed && !project.isDisposed) {
-                    NotificationGroupManager
-                        .getInstance()
-                        .getNotificationGroup(notificationGroup)
-                        .createNotification(userFriendlyTitle, userFriendlyContent, type)
-                        .notify(project)
-                }
+        // Show the notification
+        ApplicationManager.getApplication().invokeLater {
+            if (!isDisposed && !project.isDisposed) {
+                NotificationGroupManager
+                    .getInstance()
+                    .getNotificationGroup(notificationGroup)
+                    .createNotification(title, content, type)
+                    .notify(project)
             }
-        } else {
-            println("Failing silently for error: ${exception.message}")
-        }
-
-        // Always send error report to backend (regardless of user notification)
-        try {
-            val loggingEvent =
-                IdeaLoggingEvent(
-                    "$title: ${exception.message}",
-                    exception,
-                )
-            SweepErrorReportingService.getInstance().sendErrorReport(
-                events = arrayOf(loggingEvent),
-                additionalInfo = "Automatic error report: $errorContext\nUser-friendly title: $userFriendlyTitle\nUser-friendly content: $userFriendlyContent",
-                parentComponent = JPanel(),
-                pluginDescriptor = null,
-                showUserNotification = false,
-            )
-        } catch (reportingError: Exception) {
-            Logger
-                .getInstance(NotificationDeduplicationService::class.java)
-                .warn("Failed to send error report: ${reportingError.message}")
         }
     }
 

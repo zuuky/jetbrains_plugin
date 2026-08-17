@@ -33,7 +33,6 @@ import com.intellij.util.concurrency.annotations.RequiresBackgroundThread
 import com.intellij.util.concurrency.annotations.RequiresBlockingContext
 import com.intellij.util.concurrency.annotations.RequiresReadLockAbsence
 import dev.sweep.assistant.autocomplete.Debouncer
-import dev.sweep.assistant.components.SweepConfig
 import dev.sweep.assistant.services.*
 import dev.sweep.assistant.settings.SweepMetaData
 import dev.sweep.assistant.settings.SweepSettings
@@ -394,7 +393,7 @@ class RecentEditsTracker(
     private val recentCursorPositions = EvictingQueue<CursorPositionRecord>(MAX_CURSOR_POSITIONS_TRACKED)
     private val recentUserActions = EvictingQueue<UserAction>(MAX_RECENT_USER_ACTIONS)
     private val debouncer =
-        Debouncer({ SweepConfig.getInstance(project).getDebounceThresholdMs() }, scope, project) { processLatestEdit() }
+        Debouncer({ SweepSettings.getInstance().getEffectiveDebounceMs() }, scope, project) { processLatestEdit() }
     private var lastDocumentText: String? = null
     private var originalDocumentText: String = ""
 
@@ -1170,10 +1169,6 @@ class RecentEditsTracker(
             }
         }, 3, TimeUnit.SECONDS)
         logger.info("[RecentEditsTracker.init] END - settings listener deferred")
-
-        scope.launch {
-            clientIp = getPublicIPAddress()
-        }
     }
 
     private fun SweepSettings.applyAutocompleteSettings() {
@@ -1367,7 +1362,6 @@ class RecentEditsTracker(
 //                        FileDocumentManager.getInstance().saveDocument(editor.document)
 //                    }
 
-                    // Notify import detector about the accepted code insertion
                     AutocompleteImportDetector.getInstance(project).onCodeInserted(
                         editor = editor,
                         insertionOffset = it.startOffset,
@@ -1375,8 +1369,6 @@ class RecentEditsTracker(
                     )
                 }
             }
-
-            AutocompleteMetricsTracker.getInstance(project).trackSuggestionAccepted(suggestion = it)
 
             if (it is AutocompleteSuggestion.JumpToEditSuggestion) {
                 showAutocomplete(it.originalCompletion, isShowingPostJumpSuggestion = true)
@@ -1812,32 +1804,11 @@ class RecentEditsTracker(
         return fileChunks.sortedBy { it.timestamp }.takeLast(MAX_CHUNKS_TO_SEND)
     }
 
-    private fun isAppliedCodeBlockActive(): Boolean {
-        val promptBarService = PromptBarService.getInstance(project)
-        val cmdKActive = promptBarService.isPromptBarActive() || promptBarService.areActionsVisible()
-
-        if (FeatureFlagService.getInstance(project).isFeatureEnabled("enable_autocomplete_when_code_blocks_present")) {
-            // new way: only disable this while code blocks are actively being applied
-            val isApplyingBlocks = AppliedCodeBlockManager.getInstance(project).isApplyingCodeBlocksToCurrentFile()
-            return cmdKActive || isApplyingBlocks
-        } else {
-            // old way: check for applied code blocks only in the current file
-            val currentEditor = getCurrentEditor()
-            val hasAppliedBlocksInCurrentFile =
-                if (currentEditor != null) {
-                    val currentFilePath = getVirtualFileFromEditor(currentEditor)?.path
-                    if (currentFilePath != null) {
-                        val relativePath = relativePath(project, currentFilePath) ?: currentFilePath
-                        AppliedCodeBlockManager.getInstance(project).hasBlocksForFile(relativePath)
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            return hasAppliedBlocksInCurrentFile || cmdKActive
-        }
-    }
+    /**
+     * The agent and its applied code blocks were removed in this local build,
+     * so autocomplete is never suppressed by them.
+     */
+    private fun isAppliedCodeBlockActive(): Boolean = false
 
     private fun hasMultiLineSelection(): Boolean {
         val editor = getCurrentEditor() ?: return false
@@ -1862,7 +1833,7 @@ class RecentEditsTracker(
      * Check if the given file path matches any of the autocomplete exclusion patterns
      */
     private fun shouldExcludeFromAutocomplete(filePath: String): Boolean {
-        val exclusionPatterns = SweepConfig.getInstance(project).getAutocompleteExclusionPatterns()
+        val exclusionPatterns = SweepSettings.getInstance().allAutocompleteExclusionPatterns()
         if (exclusionPatterns.isEmpty()) return false
 
         val fileName = File(filePath).name
@@ -2032,30 +2003,7 @@ class RecentEditsTracker(
                                 response.completions.drop(1).forEach { suggestionQueue.add(it) }
                                 showAutocomplete(firstResponse, request.editorState)
                             } ?: run {
-                                // No suggestion was generated - track file contents for 1% of cases
-                                val sampleRatio =
-                                    FeatureFlagService
-                                        .getInstance(
-                                            project,
-                                        ).getNumericFeatureFlag("autocomplete-edit-tracking-not-shown-ratio", 10)
-                                        .toDouble() /
-                                        1_000
-                                if (kotlin.random.Random.nextDouble() < sampleRatio) {
-                                    try {
-                                        val document = getCurrentEditor()?.document ?: return@run
-                                        val rangeMarker = null
-
-                                        AutocompleteMetricsTracker.getInstance(project).trackFileContentsAfterDelay(
-                                            document = document,
-                                            rangeMarker = rangeMarker,
-                                            suggestionType = "NOT_SHOWN",
-                                            additionsAndDeletions = Pair(0, 0),
-                                            autocompleteId = response.autocomplete_id,
-                                        )
-                                    } catch (e: Exception) {
-                                        println("Error tracking file contents after delay (no suggestion): ${e.message}")
-                                    }
-                                }
+                                // No suggestion was generated
                             }
                         }
                     } catch (e: Exception) {
@@ -2166,31 +2114,6 @@ class RecentEditsTracker(
                         it.show(currentEditor, isShowingPostJumpSuggestion)
 
                         it.shownTime = System.currentTimeMillis()
-                        AutocompleteMetricsTracker.getInstance(project).trackSuggestionShown(suggestion = it)
-
-                        // Start edit tracking
-                        try {
-                            val document = currentEditor.document
-                            // Create range marker around the suggestion line
-                            val suggestionLine = document.getLineNumber(it.startOffset)
-                            val lineStartOffset = document.getLineStartOffset(suggestionLine)
-                            val lineEndOffset = document.getLineEndOffset(suggestionLine)
-                            val rangeMarker =
-                                document.createRangeMarker(lineStartOffset, lineEndOffset).apply {
-                                    isGreedyToLeft = true
-                                    isGreedyToRight = true
-                                }
-
-                            AutocompleteMetricsTracker.getInstance(project).trackFileContentsAfterDelay(
-                                document = document,
-                                rangeMarker = rangeMarker,
-                                suggestionType = it.type.name,
-                                additionsAndDeletions = Pair(it.suggestionAdditions, it.suggestionDeletions),
-                                autocompleteId = it.autocomplete_id,
-                            )
-                        } catch (e: Exception) {
-                            println("Error tracking file contents after delay: ${e.message}")
-                        }
                     } else {
                         it.dispose()
                     }
@@ -2347,7 +2270,7 @@ class RecentEditsTracker(
                     retrieval_chunks = retrievalChunks,
                     recent_user_actions = recentUserActions.toList(),
                     multiple_suggestions = true,
-                    privacy_mode_enabled = SweepConfig.getInstance(project).isPrivacyModeEnabled(),
+                    privacy_mode_enabled = false,
                     client_ip = clientIp,
                     recent_changes_high_res =
                         recentEditsHighRes
@@ -2391,7 +2314,6 @@ class RecentEditsTracker(
     fun clearAutocomplete(autocompleteDisposeReason: AutocompleteDisposeReason) {
         currentSuggestion?.disposedTime = System.currentTimeMillis()
         if (currentSuggestion?.suggestionWasShownAtAll() == true) {
-            AutocompleteMetricsTracker.getInstance(project).trackSuggestionDisposed(currentSuggestion!!)
             AutocompleteRejectionCache
                 .getInstance(project)
                 .tryAddingRejectionToCache(currentSuggestion!!, autocompleteDisposeReason)
@@ -2485,9 +2407,6 @@ class RecentEditsTracker(
                 currentSuggestion = nextEntry.suggestion
                 nextEntry.suggestion.show(nextEntry.suggestion.editor, isPostJumpSuggestion = false)
                 nextEntry.suggestion.shownTime = System.currentTimeMillis()
-
-                // Track metrics
-                AutocompleteMetricsTracker.getInstance(project).trackSuggestionShown(suggestion = nextEntry.suggestion)
             }
             return true
         }

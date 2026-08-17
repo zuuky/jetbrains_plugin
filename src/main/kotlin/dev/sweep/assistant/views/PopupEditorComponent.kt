@@ -15,11 +15,7 @@ import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.keymap.KeymapUtil
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.popup.JBPopup
-import com.intellij.openapi.ui.popup.JBPopupFactory
-import com.intellij.openapi.ui.popup.JBPopupListener
-import com.intellij.openapi.ui.popup.LightweightWindowEvent
-import com.intellij.openapi.ui.popup.PopupCornerType
+import com.intellij.openapi.ui.popup.*
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.LightVirtualFile
 import com.intellij.ui.JBColor
@@ -28,9 +24,9 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBViewport
 import com.intellij.util.ui.JBUI
 import dev.sweep.assistant.autocomplete.edit.AcceptEditCompletionAction
-import dev.sweep.assistant.components.SweepConfig
 import dev.sweep.assistant.services.IdeaVimIntegrationService
 import dev.sweep.assistant.settings.SweepMetaData
+import dev.sweep.assistant.settings.SweepSettings
 import dev.sweep.assistant.theme.SweepColors
 import dev.sweep.assistant.theme.SweepIcons
 import dev.sweep.assistant.utils.DiffGroup
@@ -340,10 +336,10 @@ class PopupEditorComponent(
             JPanel(BorderLayout()).apply {
                 border = JBUI.Borders.empty(0, 4)
                 background = editor.backgroundColor
-                val config = SweepConfig.getInstance(project)
+                val settings = SweepSettings.getInstance()
                 val sweepMetaData = SweepMetaData.getInstance()
                 // Show footer if user explicitly enabled it OR if user hasn't disabled it and they're within first 10 accepts
-                val showFooter = config.isShowAutocompleteBadge() || sweepMetaData.autocompleteAcceptCount <= 3
+                val showFooter = settings.showAutocompleteBadge || sweepMetaData.autocompleteAcceptCount <= 3
 
                 // Calculate the actual text height based on line count and line height
                 val lineCount = editor.document.lineCount

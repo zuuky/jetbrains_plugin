@@ -1,9 +1,9 @@
 package dev.sweep.assistant.utils
 
-import dev.sweep.assistant.controllers.getJSONPrefix
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.SerializationStrategy
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
@@ -121,4 +121,70 @@ fun <T> HttpResponse<T>.raiseForStatus(): HttpResponse<T> {
         throw java.io.IOException("HTTP ${statusCode()}")
     }
     return this
+}
+
+private fun getMatchingBracket(char: Char): Char? =
+    when (char) {
+        '[' -> ']'
+        '{' -> '}'
+        '(' -> ')'
+        else -> null
+    }
+
+/**
+ * Extracts complete JSON elements from the prefix of a (possibly partial) JSON stream.
+ * Returns the parsed elements and the number of consumed characters.
+ */
+fun getJSONPrefix(buffer: String): Pair<List<JsonElement>, Int> {
+    if (buffer.startsWith("null")) {
+        // for heartbeat messages
+        return Pair(emptyList(), "null".length)
+    }
+
+    val stack = mutableListOf<Char>()
+    var currentIndex = 0
+    val results = mutableListOf<JsonElement>()
+    var inString = false
+    var escapeNext = false
+
+    for (i in buffer.indices) {
+        val char = buffer[i]
+
+        if (escapeNext) {
+            escapeNext = false
+            continue
+        }
+
+        if (char == '\\') {
+            escapeNext = true
+            continue
+        }
+
+        if (char == '"') {
+            inString = !inString
+        }
+
+        if (!inString) {
+            when {
+                char == '[' || char == '{' || char == '(' -> {
+                    stack.add(char)
+                }
+
+                stack.lastOrNull()?.let { getMatchingBracket(it) } == char -> {
+                    stack.removeAt(stack.lastIndex)
+                    if (stack.isEmpty()) {
+                        try {
+                            val jsonElement = Json.parseToJsonElement(buffer.substring(currentIndex, i + 1))
+                            results.add(jsonElement)
+                            currentIndex = i + 1
+                        } catch (e: Exception) {
+                            // Malformed JSON, keep scanning
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return Pair(results, currentIndex)
 }

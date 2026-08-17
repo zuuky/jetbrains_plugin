@@ -9,32 +9,25 @@ import com.intellij.openapi.project.Project
 import com.intellij.util.concurrency.annotations.RequiresBackgroundThread
 import dev.sweep.assistant.autocomplete.edit.NextEditAutocompleteRequest
 import dev.sweep.assistant.autocomplete.edit.NextEditAutocompleteResponse
-import dev.sweep.assistant.components.SweepConfig
 import dev.sweep.assistant.settings.SweepSettings
-import dev.sweep.assistant.settings.SweepSettingsParser
-import dev.sweep.assistant.utils.CompressionUtils
-import dev.sweep.assistant.utils.encodeString
-import dev.sweep.assistant.utils.getCurrentSweepPluginVersion
-import dev.sweep.assistant.utils.getDebugInfo
-import dev.sweep.assistant.utils.defaultJson
-import dev.sweep.assistant.utils.raiseForStatus
-import dev.sweep.assistant.utils.streamJson
-import kotlinx.coroutines.*
+import dev.sweep.assistant.utils.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.future.await
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.coroutines.future.await
-import java.net.InetAddress
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
-import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Service that periodically resolves the IP address of autocomplete.sweep.dev
- * to keep DNS cache warm while using HTTPS with the domain name directly.
+ * Executes the next-edit autocomplete HTTP requests against the configured server
+ * (remote URL when set, otherwise the local sweep-autocomplete server).
  */
 @Service(Service.Level.PROJECT)
 class AutocompleteIpResolverService(
@@ -45,28 +38,13 @@ class AutocompleteIpResolverService(
 
         fun getInstance(project: Project): AutocompleteIpResolverService = project.getService(AutocompleteIpResolverService::class.java)
 
-        private const val HOSTNAME = "autocomplete.sweep.dev"
-        private const val RESOLUTION_INTERVAL_MS = 15_000L
-        private const val HEALTH_CHECK_INTERVAL_MS = 25_000L // Just under 30 seconds
         private const val READ_TIMEOUT_MS = 10_000L
         private const val USER_ACTIVITY_TIMEOUT_MS = 15 * 60 * 1000L // 15 minutes
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val lastLatencyMs = AtomicLong(-1L) // -1 indicates no measurement yet
-    private val lastUserActionTimestamp = AtomicLong(System.currentTimeMillis()) // Initialize with current time
-    private var resolutionJob: Job? = null
-    private var healthCheckJob: Job? = null
-
-    /**
-     * Checks if the user is pointed to the cloud version of the plugin.
-     * Returns true if either:
-     * 1. The user is on the cloud environment (plugin version), OR
-     * 2. Their backend URL is pointed to https://backend.app.sweep.dev
-     */
-    private fun isPointedToCloud(): Boolean =
-        SweepSettingsParser.isCloudEnvironment() ||
-            SweepSettings.getInstance().baseUrl == "https://backend.app.sweep.dev"
+    private val lastUserActionTimestamp: java.util.concurrent.atomic.AtomicLong =
+        java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
 
     // HTTP client with connection pooling and keep-alive
     private val httpClient =
@@ -83,13 +61,14 @@ class AutocompleteIpResolverService(
     fun getSharedHttpClient(): HttpClient = httpClient
 
     /**
-     * Executes a next edit autocomplete request.
-     * This centralizes the entire HTTP request flow in the DNS resolver service.
+     * Executes a next edit autocomplete request against the configured server
+     * (remote URL if set, otherwise the local server).
      */
     @RequiresBackgroundThread
     suspend fun fetchNextEditAutocomplete(request: NextEditAutocompleteRequest): NextEditAutocompleteResponse? =
         try {
-            if (SweepConfig.getInstance(project).isAutocompleteLocalMode()) {
+            val isLocalMode = SweepSettings.getInstance().autocompleteLocalMode
+            if (isLocalMode) {
                 LocalAutocompleteServerManager.getInstance().ensureServerRunning()
             }
 
@@ -118,12 +97,7 @@ class AutocompleteIpResolverService(
                     Pair(postDataBytes, false)
                 }
 
-            val authorization =
-                if (SweepSettings.getInstance().githubToken.isBlank()) {
-                    "Bearer device_id_${PermanentInstallationID.get()}"
-                } else {
-                    "Bearer ${SweepSettings.getInstance().githubToken}"
-                }
+            val authorization = "Bearer device_id_${PermanentInstallationID.get()}"
 
             val httpRequestBuilder =
                 HttpRequest
@@ -150,7 +124,6 @@ class AutocompleteIpResolverService(
                     .raiseForStatus()
 
             var result: NextEditAutocompleteResponse? = null
-            val isLocalMode = SweepConfig.getInstance(project).isAutocompleteLocalMode()
 
             if (isLocalMode) {
                 // For local mode, read line-by-line to handle server crashes mid-stream gracefully
@@ -196,43 +169,19 @@ class AutocompleteIpResolverService(
             result
         } catch (e: Exception) {
             logger.warn("Error fetching next edit autocomplete: ${e.message}")
-            if (SweepConfig.getInstance(project).isAutocompleteLocalMode()) {
+            if (SweepSettings.getInstance().autocompleteLocalMode) {
                 LocalAutocompleteServerManager.getInstance().reportFailure()
             }
             throw e
         }
 
-    init {
-        startPeriodicResolution()
-        startPeriodicHealthCheck()
-    }
-
     /**
-     * Gets the base URL using the configured backend URL or autocomplete.sweep.dev.
+     * Gets the autocomplete server base URL (remote URL if set, otherwise local server).
      */
-    fun getBaseUrl(): String {
-        if (SweepConfig.getInstance(project).isAutocompleteLocalMode()) {
-            return LocalAutocompleteServerManager.getInstance().getServerUrl()
-        }
-
-        if (!isPointedToCloud()) {
-            // Use the configured backend URL when not pointed to cloud
-            return SweepSettings.getInstance().baseUrl
-        }
-
-        // Always use https://autocomplete.sweep.dev directly, let OS handle DNS caching
-        return "https://autocomplete.sweep.dev"
-    }
-
-    /**
-     * Gets the last measured latency in milliseconds.
-     * Returns -1 if no measurement has been taken yet.
-     */
-    fun getLastLatencyMs(): Long = lastLatencyMs.get()
+    fun getBaseUrl(): String = LocalAutocompleteServerManager.getInstance().getServerUrl()
 
     /**
      * Updates the timestamp of the last user action.
-     * Call this whenever the user performs any action (typing, clicking, etc.).
      */
     fun updateLastUserActionTimestamp() {
         lastUserActionTimestamp.set(System.currentTimeMillis())
@@ -243,92 +192,10 @@ class AutocompleteIpResolverService(
      */
     private fun hasRecentUserActivity(): Boolean {
         val currentTime = System.currentTimeMillis()
-        val lastActivity = lastUserActionTimestamp.get()
-        return (currentTime - lastActivity) <= USER_ACTIVITY_TIMEOUT_MS
-    }
-
-    private fun startPeriodicResolution() {
-        resolutionJob =
-            scope.launch {
-                // Initial resolution
-                resolveIpAddress()
-
-                // Periodic resolution every 15 seconds, but only if user was active in last 10 minutes
-                while (isActive) {
-                    delay(RESOLUTION_INTERVAL_MS)
-                    if (hasRecentUserActivity()) {
-                        resolveIpAddress()
-                    }
-                }
-            }
-    }
-
-    private fun startPeriodicHealthCheck() {
-        healthCheckJob =
-            scope.launch {
-                // Initial health check
-                performHealthCheck()
-
-                // Periodic health check every 25 seconds, but only if user was active in last 10 minutes
-                while (isActive) {
-                    delay(HEALTH_CHECK_INTERVAL_MS)
-                    if (hasRecentUserActivity()) {
-                        performHealthCheck()
-                    }
-                }
-            }
-    }
-
-    private suspend fun resolveIpAddress() {
-        if (SweepConfig.getInstance(project).isAutocompleteLocalMode()) return
-        if (!isPointedToCloud()) return
-        try {
-            withContext(Dispatchers.IO) {
-                // Just resolve the hostname to keep DNS cache warm
-                // We don't use the IP addresses, just let the OS cache them
-                InetAddress.getAllByName(HOSTNAME)
-            }
-        } catch (e: Exception) {
-            logger.warn("Failed to resolve $HOSTNAME: ${e.message}")
-        }
-    }
-
-    private suspend fun performHealthCheck() {
-        if (SweepConfig.getInstance(project).isAutocompleteLocalMode()) return
-        if (!isPointedToCloud()) return
-        try {
-            withContext(Dispatchers.IO) {
-                val baseUrl = getBaseUrl()
-                val startTime = System.currentTimeMillis()
-
-                val request =
-                    HttpRequest
-                        .newBuilder()
-                        .uri(URI.create(baseUrl))
-                        .timeout(Duration.ofMillis(READ_TIMEOUT_MS))
-                        .GET()
-                        .build()
-
-                val response = httpClient.send(request, HttpResponse.BodyHandlers.discarding())
-                val endTime = System.currentTimeMillis()
-                val latency = endTime - startTime
-
-                if (response.statusCode() in 200..299) {
-                    lastLatencyMs.set(latency)
-//                    println("AutocompleteIpResolverService: Health check to $baseUrl successful, latency: ${latency}ms")
-                } else {
-                    logger.warn("Health check to $baseUrl failed with response code: ${response.statusCode()}")
-                }
-            }
-        } catch (e: Exception) {
-            logger.warn("Health check failed: ${e.message}")
-            // Keep the last latency value on failure
-        }
+        return (currentTime - lastUserActionTimestamp.get()) <= USER_ACTIVITY_TIMEOUT_MS
     }
 
     override fun dispose() {
-        resolutionJob?.cancel()
-        healthCheckJob?.cancel()
         scope.cancel()
     }
 }

@@ -1,13 +1,7 @@
 package dev.sweep.assistant.statusbar
 
-import com.intellij.ide.BrowserUtil
-import com.intellij.notification.NotificationGroupManager
-import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
-import com.intellij.openapi.actionSystem.AnAction
-import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.PermanentInstallationID
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
@@ -19,32 +13,21 @@ import com.intellij.openapi.wm.StatusBarWidget
 import com.intellij.openapi.wm.WindowManager
 import com.intellij.util.Consumer
 import com.intellij.vcsUtil.showAbove
-import dev.sweep.assistant.components.SweepConfig
 import dev.sweep.assistant.services.AutocompleteSnoozeService
-import dev.sweep.assistant.services.FeatureFlagService
 import dev.sweep.assistant.services.LocalAutocompleteServerManager
 import dev.sweep.assistant.services.SweepProjectService
-import dev.sweep.assistant.settings.SweepEnvironmentConstants.Defaults.BILLING_URL
 import dev.sweep.assistant.settings.SweepSettings
-import dev.sweep.assistant.tracking.EventType
-import dev.sweep.assistant.tracking.TelemetryService
-import dev.sweep.assistant.utils.getConnection
 import kotlinx.coroutines.*
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import java.awt.AlphaComposite
+import java.awt.Graphics
+import java.awt.Graphics2D
 import java.awt.event.MouseEvent
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
 import javax.swing.Icon
 
-@Serializable
-data class AutocompleteEntitlementResponse(
-    val is_entitled: Boolean,
-    val autocomplete_suggestions_remaining: Int,
-    val autocomplete_budget: Int,
-)
-
+/**
+ * Status bar widget showing the next-edit autocomplete server status.
+ * In local mode it checks the local/remote autocomplete server health directly.
+ */
 class AutocompleteStatusBarWidget(
     private val project: Project,
 ) : StatusBarWidget,
@@ -54,15 +37,11 @@ class AutocompleteStatusBarWidget(
         private val logger = Logger.getInstance(AutocompleteStatusBarWidget::class.java)
         const val ID = "SweepAutocompleteStatus"
         private const val CHECK_INTERVAL_MS = 900000L // Check every 15 minutes
-        private const val TIMEOUT_MS = 5000 // 5 second timeout for health check
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var isAlive = true
     private var clickHandler: Consumer<MouseEvent>? = null
-    private var entitlementInfo: AutocompleteEntitlementResponse? = null
-    private var hasShownLowCompletionsWarning = false
-    private var hasShownOutOfCompletionsNotification = false
     private val snoozeService = AutocompleteSnoozeService.getInstance(project)
     private val snoozeStateListener = { updateWidget() }
 
@@ -86,90 +65,65 @@ class AutocompleteStatusBarWidget(
     }
 
     // IconPresentation implementation
-    override fun getIcon(): Icon? =
-        when {
-            shouldShowDarkerIcon() -> getSweepIcon(IconState.DARKER)
-            else -> getSweepIcon(IconState.NORMAL)
+    override fun getIcon(): Icon? {
+        val baseIcon = IconLoader.getIcon("/icons/sweep16x16.svg", javaClass)
+        if (snoozeService.isAutocompleteSnooze() || !isAlive) {
+            return object : Icon {
+                override fun paintIcon(
+                    c: java.awt.Component?,
+                    g: Graphics?,
+                    x: Int,
+                    y: Int,
+                ) {
+                    g?.let { graphics ->
+                        if (graphics is Graphics2D) {
+                            val originalComposite = graphics.composite
+                            graphics.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.5f)
+                            baseIcon.paintIcon(c, graphics, x, y)
+                            graphics.composite = originalComposite
+                        } else {
+                            baseIcon.paintIcon(c, graphics, x, y)
+                        }
+                    } ?: baseIcon.paintIcon(c, g, x, y)
+                }
+
+                override fun getIconWidth(): Int = baseIcon.iconWidth
+
+                override fun getIconHeight(): Int = baseIcon.iconHeight
+            }
         }
-
-    private enum class IconState {
-        NORMAL,
-        DARKER,
-    }
-
-    private fun shouldShowDarkerIcon(): Boolean {
-        // Show darker icon when snoozed, offline, or out of completions
-        return snoozeService.isAutocompleteSnooze() ||
-            !isAlive ||
-            (entitlementInfo?.autocomplete_suggestions_remaining == 0)
+        return baseIcon
     }
 
     override fun getClickConsumer(): Consumer<MouseEvent>? = clickHandler
 
-    override fun getTooltipText(): String =
-        when {
-            SweepConfig.getInstance(project).isAutocompleteLocalMode() -> {
-                val remoteUrl = SweepConfig.getInstance(project).getAutocompleteRemoteUrl()
-                if (remoteUrl.isNotBlank()) {
-                    "Sweep Autocomplete: Remote ($remoteUrl) - Click for options"
-                } else {
-                    "Sweep Autocomplete: Local Mode - Click for options"
-                }
+    override fun getTooltipText(): String {
+        val settings = SweepSettings.getInstance()
+        return if (settings.autocompleteLocalMode) {
+            val remoteUrl = settings.autocompleteRemoteUrl
+            if (remoteUrl.isNotBlank()) {
+                "Sweep Autocomplete: Remote ($remoteUrl) - Click for options"
+            } else {
+                "Sweep Autocomplete: Local Mode - Click for options"
             }
-            snoozeService.isAutocompleteSnooze() -> {
-                val remaining = snoozeService.formatRemainingTime()
-                "Sweep Autocomplete: Snoozed ($remaining remaining) - Click for options"
-            }
-            isAlive -> "Sweep Autocomplete: Online - Click for options"
-            else -> "Sweep Autocomplete: Offline - Click for options"
-        }
-
-    private fun getSweepIcon(state: IconState): Icon {
-        val baseIcon = IconLoader.getIcon("/icons/sweep16x16.svg", javaClass)
-
-        return when (state) {
-            IconState.NORMAL -> baseIcon
-            IconState.DARKER -> {
-                object : Icon {
-                    override fun paintIcon(
-                        c: java.awt.Component?,
-                        g: java.awt.Graphics?,
-                        x: Int,
-                        y: Int,
-                    ) {
-                        // Paint the base Sweep icon with darker appearance
-                        g?.let { graphics ->
-                            if (graphics is java.awt.Graphics2D) {
-                                val originalComposite = graphics.composite
-                                // Make the icon appear darker by reducing opacity
-                                graphics.composite = java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, 0.5f)
-                                baseIcon.paintIcon(c, graphics, x, y)
-                                graphics.composite = originalComposite
-                            } else {
-                                baseIcon.paintIcon(c, graphics, x, y)
-                            }
-                        } ?: baseIcon.paintIcon(c, g, x, y)
-                    }
-
-                    override fun getIconWidth(): Int = baseIcon.iconWidth
-
-                    override fun getIconHeight(): Int = baseIcon.iconHeight
-                }
-            }
+        } else if (snoozeService.isAutocompleteSnooze()) {
+            "Sweep Autocomplete: Snoozed (${snoozeService.formatRemainingTime()} remaining) - Click for options"
+        } else if (isAlive) {
+            "Sweep Autocomplete: Online - Click for options"
+        } else {
+            "Sweep Autocomplete: Offline - Click for options"
         }
     }
 
     private fun startHealthCheck() {
-        // Set up click handler to show popup menu
         clickHandler =
             Consumer { event ->
                 showPopupMenu(event)
             }
 
-        // Start periodic health check
         scope.launch {
             while (isActive) {
-                checkAutocompleteHealth()
+                isAlive = performHealthCheck()
                 updateWidget()
                 delay(CHECK_INTERVAL_MS)
             }
@@ -177,18 +131,15 @@ class AutocompleteStatusBarWidget(
     }
 
     private fun showPopupMenu(event: MouseEvent) {
-        // Refresh entitlement info when user clicks
         scope.launch {
-            checkAutocompleteHealth()
+            isAlive = performHealthCheck()
         }
         updateWidget()
 
         val menuItems = mutableListOf<String>()
         val actions = mutableListOf<() -> Unit>()
 
-        val currentEntitlementInfo = entitlementInfo
-
-        val isLocalMode = SweepConfig.getInstance(project).isAutocompleteLocalMode()
+        val isLocalMode = SweepSettings.getInstance().autocompleteLocalMode
 
         val accessStatus =
             when {
@@ -197,38 +148,14 @@ class AutocompleteStatusBarWidget(
                     val remaining = snoozeService.formatRemainingTime()
                     "🔄 Snoozed ($remaining remaining)"
                 }
-                !isAlive -> "Offline"
-                currentEntitlementInfo == null -> "Unauthorized"
-                currentEntitlementInfo.autocomplete_suggestions_remaining == 0 -> "No Completions Left"
-                currentEntitlementInfo.autocomplete_suggestions_remaining <= currentEntitlementInfo.autocomplete_budget -> {
-                    "${maxOf(
-                        0,
-                        currentEntitlementInfo.autocomplete_suggestions_remaining,
-                    )}/${currentEntitlementInfo.autocomplete_budget} remaining"
-                }
-                else -> "Unlimited access"
+                else -> if (isAlive) "Online" else "Offline"
             }
-
-        if (!isLocalMode && !snoozeService.isAutocompleteSnooze() && isAlive) {
-            currentEntitlementInfo?.let { info ->
-                // Only show upgrade option for limited plans (not unlimited) or when out of suggestions
-                if (info.autocomplete_suggestions_remaining <= info.autocomplete_budget || info.autocomplete_suggestions_remaining == 0) {
-                    // Add upgrade button if user is not entitled or has low balance
-                    menuItems.add("Upgrade to Pro")
-                    actions.add {
-                        BrowserUtil.browse("https://app.sweep.dev")
-                    }
-                }
-            }
-        }
 
         if (snoozeService.isAutocompleteSnooze()) {
-            // Show unsnooze option
             val remaining = snoozeService.formatRemainingTime()
             menuItems.add("Unsnooze ($remaining remaining)")
             actions.add { snoozeService.unsnooze() }
         } else {
-            // Show snooze options
             val snoozeOptions =
                 listOf(
                     "Snooze for 5 minutes" to AutocompleteSnoozeService.SNOOZE_5_MINUTES,
@@ -242,16 +169,12 @@ class AutocompleteStatusBarWidget(
                 menuItems.add(label)
                 actions.add {
                     snoozeService.snoozeAutocomplete(duration)
-                    TelemetryService.getInstance().sendUsageEvent(
-                        EventType.AUTOCOMPLETE_SNOOZED,
-                        eventProperties = mapOf("duration_ms" to duration.toString()),
-                    )
                 }
             }
 
             if (!isAlive) {
                 menuItems.add("Retry Connection")
-                actions.add { checkAutocompleteHealth() }
+                actions.add { scope.launch { isAlive = performHealthCheck() } }
             }
         }
 
@@ -270,10 +193,7 @@ class AutocompleteStatusBarWidget(
                     return PopupStep.FINAL_CHOICE
                 }
 
-                override fun isSelectable(value: String?): Boolean {
-                    // All menu items are selectable since status is now in title
-                    return true
-                }
+                override fun isSelectable(value: String?): Boolean = true
             }
 
         val popup = JBPopupFactory.getInstance().createListPopup(popupStep)
@@ -286,173 +206,13 @@ class AutocompleteStatusBarWidget(
         }
     }
 
-    private fun showLowCompletionsWarning(
-        remaining: Int,
-        budget: Int,
-    ) {
-        ApplicationManager.getApplication().invokeLater {
+    private suspend fun performHealthCheck(): Boolean =
+        withContext(Dispatchers.IO) {
             try {
-                val notificationGroup =
-                    NotificationGroupManager
-                        .getInstance()
-                        .getNotificationGroup("Sweep Autocomplete")
-
-                if (notificationGroup == null) {
-                    logger.warn("Sweep Autocomplete: Notification group not found!")
-                    return@invokeLater
-                }
-
-                val notification =
-                    notificationGroup.createNotification(
-                        "Sweep Autocomplete",
-                        "You're running low on autocomplete suggestions ($remaining/$budget remaining). Upgrade to Pro for unlimited completions.",
-                        NotificationType.WARNING,
-                    )
-
-                notification.addAction(
-                    object : AnAction("Upgrade to Pro") {
-                        override fun actionPerformed(e: AnActionEvent) {
-                            BrowserUtil.browse("https://app.sweep.dev")
-                            notification.expire()
-                        }
-                    },
-                )
-
-                notification.notify(project)
+                LocalAutocompleteServerManager.getInstance().isServerHealthy()
             } catch (e: Exception) {
-                logger.warn("Error showing low completions warning: ${e.message}", e)
-            }
-        }
-    }
-
-    private fun showOutOfCompletionsNotification() {
-        ApplicationManager.getApplication().invokeLater {
-            try {
-                val notificationGroup =
-                    NotificationGroupManager
-                        .getInstance()
-                        .getNotificationGroup("Sweep Autocomplete")
-
-                if (notificationGroup == null) {
-                    logger.warn("Sweep Autocomplete: Notification group not found!")
-                    return@invokeLater
-                }
-
-                val notification =
-                    notificationGroup.createNotification(
-                        "Sweep Autocomplete",
-                        "You've run out of autocomplete suggestions. Upgrade to Pro for unlimited completions.",
-                        NotificationType.ERROR,
-                    )
-
-                notification.addAction(
-                    object : AnAction("Upgrade to Pro") {
-                        override fun actionPerformed(e: AnActionEvent) {
-                            BrowserUtil.browse("https://app.sweep.dev")
-                            notification.expire()
-                        }
-                    },
-                )
-
-                notification.notify(project)
-            } catch (e: Exception) {
-                logger.warn("Error showing out of completions notification: ${e.message}", e)
-            }
-        }
-    }
-
-    private fun checkAutocompleteHealth() {
-        scope.launch {
-            try {
-                isAlive = performHealthCheck()
-
-                // Check completion status and show notifications
-                entitlementInfo?.let { currentInfo ->
-                    val currentRemaining = currentInfo.autocomplete_suggestions_remaining
-                    val budget = currentInfo.autocomplete_budget
-
-                    // Only show notifications for limited plans (not unlimited)
-                    if (currentRemaining <= budget) {
-                        // Show notification if user is out of completions
-                        if (currentRemaining == 0 && !hasShownOutOfCompletionsNotification) {
-                            showOutOfCompletionsNotification()
-                            if (FeatureFlagService.getInstance(project).isFeatureEnabled("open-billing-url-when-out-of-completions")) {
-                                BrowserUtil.browse(BILLING_URL)
-                            }
-                            hasShownOutOfCompletionsNotification = true
-                        } else if (currentRemaining in 1..<10 &&
-                            // check zero so we don't double show notifs
-                            !hasShownLowCompletionsWarning
-                        ) { // Show warning when getting less than 10 completions remaining
-                            showLowCompletionsWarning(currentRemaining, budget)
-                            hasShownLowCompletionsWarning = true
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                isAlive = false
-                entitlementInfo = null
-            }
-        }
-    }
-
-    private suspend fun performHealthCheck(): Boolean {
-        // In local mode, check the local server health instead of cloud entitlement
-        if (SweepConfig.getInstance(project).isAutocompleteLocalMode()) {
-            return withContext(Dispatchers.IO) {
-                val healthy = LocalAutocompleteServerManager.getInstance().isServerHealthy()
-                if (healthy) {
-                    entitlementInfo = null
-                }
-                healthy
-            }
-        }
-
-        return withContext(Dispatchers.IO) {
-            try {
-                val authorization =
-                    if (SweepSettings.getInstance().githubToken.isBlank()) {
-                        "Bearer device_id_${PermanentInstallationID.get()}"
-                    } else {
-                        "Bearer ${SweepSettings.getInstance().githubToken}"
-                    }
-                // Try to make a request to the backend to get entitlement info
-                val connection =
-                    getConnection(
-                        "backend/is_entitled_to_autocomplete",
-                        connectTimeoutMs = TIMEOUT_MS,
-                        readTimeoutMs = TIMEOUT_MS,
-                        authorization = authorization,
-                    )
-                connection.requestMethod = "GET"
-
-                val responseCode = connection.responseCode
-
-                if (responseCode == HttpURLConnection.HTTP_OK) {
-                    // Parse the JSON response
-                    val responseText =
-                        BufferedReader(InputStreamReader(connection.inputStream)).use { reader ->
-                            reader.readText()
-                        }
-
-                    try {
-                        entitlementInfo = Json.decodeFromString<AutocompleteEntitlementResponse>(responseText)
-                    } catch (e: Exception) {
-                        // If JSON parsing fails, clear entitlement info but still consider connection alive
-                        entitlementInfo = null
-                    }
-
-                    connection.disconnect()
-                    return@withContext true
-                } else {
-                    entitlementInfo = null
-                    connection.disconnect()
-                    return@withContext false
-                }
-            } catch (e: Exception) {
-                entitlementInfo = null
+                logger.warn("Failed to check autocomplete server health: ${e.message}")
                 false
             }
         }
-    }
 }

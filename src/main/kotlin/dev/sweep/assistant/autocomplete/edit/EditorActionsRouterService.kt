@@ -15,11 +15,8 @@ import com.intellij.openapi.keymap.KeymapManagerListener
 import com.intellij.openapi.project.Project
 import dev.sweep.assistant.settings.SweepMetaData
 import dev.sweep.assistant.settings.SweepSettings
-import dev.sweep.assistant.tracking.EventType
-import dev.sweep.assistant.tracking.TelemetryService
 import dev.sweep.assistant.utils.SweepConstants
 import dev.sweep.assistant.utils.getKeyStrokesForAction
-import dev.sweep.assistant.utils.parseKeyStrokesToPrint
 import java.awt.AWTEvent
 import java.awt.Component
 import java.awt.event.KeyEvent
@@ -107,9 +104,6 @@ class EditorActionsRouterService : Disposable {
     @Volatile
     private var activeRejectActions: Set<String> = emptySet()
 
-    private var lastAcceptKeystrokes: String = ""
-    private var lastRejectKeystrokes: String = ""
-
     companion object {
         fun getInstance(): EditorActionsRouterService =
             ApplicationManager
@@ -121,10 +115,6 @@ class EditorActionsRouterService : Disposable {
     }
 
     init {
-        // Initialize baseline for telemetry
-        lastAcceptKeystrokes = getKeystrokesString(ACCEPT_ACTION_ID)
-        lastRejectKeystrokes = getKeystrokesString(REJECT_ACTION_ID)
-
         // Update active actions cache
         updateActiveActions()
 
@@ -146,7 +136,6 @@ class EditorActionsRouterService : Disposable {
                 KeymapManagerListener.TOPIC,
                 object : KeymapManagerListener {
                     override fun activeKeymapChanged(keymap: com.intellij.openapi.keymap.Keymap?) {
-                        checkAndTrackKeystrokeChanges()
                         updateActiveActions()
                     }
                 },
@@ -352,42 +341,6 @@ class EditorActionsRouterService : Disposable {
         // Only the keybindings explicitly configured by the user will trigger accept/reject behavior.
         // Special cases (caret movement rejection, Alt-Right accept word) are also handled in that loop.
     }
-
-    private fun checkAndTrackKeystrokeChanges() {
-        val currentAccept = getKeystrokesString(ACCEPT_ACTION_ID)
-        if (currentAccept != lastAcceptKeystrokes) {
-            TelemetryService.getInstance().sendUsageEvent(
-                EventType.AUTOCOMPLETE_KEYBINDING_CHANGED,
-                eventProperties =
-                    mapOf(
-                        "action" to "accept",
-                        "old_binding" to lastAcceptKeystrokes,
-                        "new_binding" to currentAccept,
-                    ),
-            )
-            lastAcceptKeystrokes = currentAccept
-        }
-
-        val currentReject = getKeystrokesString(REJECT_ACTION_ID)
-        if (currentReject != lastRejectKeystrokes) {
-            TelemetryService.getInstance().sendUsageEvent(
-                EventType.AUTOCOMPLETE_KEYBINDING_CHANGED,
-                eventProperties =
-                    mapOf(
-                        "action" to "reject",
-                        "old_binding" to lastRejectKeystrokes,
-                        "new_binding" to currentReject,
-                    ),
-            )
-            lastRejectKeystrokes = currentReject
-        }
-    }
-
-    private fun getKeystrokesString(actionId: String): String =
-        getKeyStrokesForAction(actionId)
-            .mapNotNull { parseKeyStrokesToPrint(it) }
-            .sorted()
-            .joinToString(", ")
 
     private fun trackerFor(editor: Editor): RecentEditsTracker? {
         val project: Project = editor.project ?: return null

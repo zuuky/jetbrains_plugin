@@ -2,28 +2,17 @@ package dev.sweep.assistant.utils
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Document
-import com.intellij.openapi.editor.Editor
-import com.intellij.openapi.editor.LogicalPosition
-import com.intellij.openapi.editor.ScrollType
-import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
-import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.openapi.wm.ToolWindowManager
-import dev.sweep.assistant.components.TutorialPage
-import dev.sweep.assistant.data.SelectedSnippet
-import dev.sweep.assistant.services.SweepNonProjectFilesService
 import org.jetbrains.plugins.terminal.TerminalProjectOptionsProvider
-import org.jetbrains.plugins.terminal.TerminalToolWindowManager
 import java.io.File
 import java.nio.file.InvalidPathException
-import java.nio.file.Paths
 import kotlin.math.min
 
 /**
@@ -206,26 +195,6 @@ fun readFile(
     val maxFileSize = SweepConstants.MAX_FILE_SIZE_BYTES
     val filePath = FileUtil.toSystemIndependentName(filePath)
 
-    // Handle tutorial file first
-    if (filePath == TutorialPage.AUTOCOMPLETE_PATH || filePath == TutorialPage.CHAT_PATH) {
-        fun readTutorialContent(): String? {
-            val virtualFile = getVirtualFile(project, filePath) ?: return null
-            // TutorialVirtualFile content is set in its init block.
-            // FileDocumentManager should provide the document for this LightVirtualFile.
-            val document =
-                if (application.isReadAccessAllowed) {
-                    FileDocumentManager.getInstance().getDocument(virtualFile)
-                } else {
-                    application.runReadAction<Document?> {
-                        FileDocumentManager.getInstance().getDocument(virtualFile)
-                    }
-                }
-            return document?.let { extractTextFromDocument(it, maxLines, maxChars) }
-        }
-
-        return readTutorialContent()
-    }
-
     fun readFromEditor(): String? {
         // Add project disposal guard to prevent ContainerDisposedException
         if (project.isDisposed) {
@@ -289,6 +258,14 @@ fun getVirtualFile(
     }
 }
 
+fun absolutePath(
+    project: Project,
+    relativePath: String,
+): String {
+    if (File(relativePath).isAbsolute) return relativePath
+    return File(project.osBasePath ?: ".", relativePath).path
+}
+
 fun relativePath(
     project: Project,
     vf: VirtualFile?,
@@ -327,26 +304,7 @@ fun relativePath(
     if (project.isDisposed) {
         return project.osBasePath?.let { basePath -> relativePath(basePath, fullPath) }
     }
-
-    // Check if it's a non-project file managed by SweepNonProjectFilesService
-    if (SweepNonProjectFilesService.getInstance(project).isAllowedFile(fullPath)) return fullPath
     return project.osBasePath?.let { basePath -> relativePath(basePath, fullPath) }
-}
-
-fun absolutePath(
-    project: Project,
-    relativePath: String,
-): String {
-    if (File(relativePath).isAbsolute) return relativePath
-    if (relativePath == TutorialPage.AUTOCOMPLETE_PATH || relativePath == TutorialPage.CHAT_PATH) return relativePath
-
-    // Add disposal check before accessing project service
-    if (project.isDisposed) {
-        return File(relativePath).absolutePath // Fallback to system absolute path
-    }
-
-    if (SweepNonProjectFilesService.getInstance(project).isAllowedFile(relativePath)) return relativePath
-    return File(project.osBasePath!!, relativePath).path
 }
 
 fun getCurrentSelectedFile(project: Project): VirtualFile? {
@@ -361,271 +319,23 @@ fun getCurrentSelectedFile(project: Project): VirtualFile? {
         .filterNot {
             SweepConstants.diffFiles.contains(it.name)
         }.firstOrNull {
-            SweepNonProjectFilesService.getInstance(project).isAllowedFile(it.url) ||
-                SweepNonProjectFilesService.getInstance(project).isAllowedFile(it.path) ||
-                (
-                    it.isInLocalFileSystem &&
-                        try {
-                            VfsUtil.isAncestor(File(project.osBasePath!!).toPath().toFile(), it.toNioPath().toFile(), false)
-                        } catch (e: UnsupportedOperationException) {
-                            false
-                        }
-                )
-        }
-}
-
-fun getAllOpenFiles(project: Project): List<VirtualFile> {
-    // Add disposal check before accessing project service
-    if (project.isDisposed) {
-        return emptyList()
-    }
-
-    return FileEditorManager
-        .getInstance(project)
-        .openFiles
-        .filter {
-            SweepNonProjectFilesService.getInstance(project).isAllowedFile(it.url) ||
-                (
-                    !SweepConstants.diffFiles.contains(it.name) &&
-                        it.isInLocalFileSystem &&
+            it.isInLocalFileSystem &&
+                    try {
                         VfsUtil.isAncestor(File(project.osBasePath!!).toPath().toFile(), it.toNioPath().toFile(), false)
-                )
-        }
-}
-
-fun getAllOpenFilePaths(
-    project: Project,
-    relativePaths: Boolean = false,
-): List<String> =
-    getAllOpenFiles(project)
-        .mapNotNull { file ->
-            if (relativePaths) {
-                relativePath(project, file)
-            } else {
-                file.path
-            }
-        }
-
-fun getCurrentSelectedSnippet(project: Project): Pair<SelectedSnippet, String>? {
-    val application = ApplicationManager.getApplication()
-
-    fun inner(): Pair<SelectedSnippet, String>? {
-        val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return null
-        val document = editor.document
-        val file = FileDocumentManager.getInstance().getFile(document) ?: return null
-        val relativePath = relativePath(project, file) ?: return null
-
-        return editor.selectionModel.takeIf { it.hasSelection() }?.run {
-            Pair(
-                SelectedSnippet(
-                    file.name,
-                    document.getLineNumber(selectionStart) + 1,
-                    document.getLineNumber(selectionEnd) + 1,
-                ),
-                relativePath,
-            )
-        }
-    }
-
-    return if (application.isReadAccessAllowed) {
-        inner()
-    } else {
-        application.runReadAction<Pair<SelectedSnippet, String>?> { inner() }
-    }
-}
-
-fun foldEditorOutside(
-    startLine: Int,
-    endLine: Int,
-    editor: Editor,
-    document: Document,
-    foldText: String = "",
-) {
-    val startOffset = document.getLineStartOffset(startLine)
-    val endOffset = document.getLineEndOffset(endLine)
-    editor.scrollingModel.scrollToCaret(ScrollType.CENTER)
-
-    editor.foldingModel.runBatchFoldingOperation {
-        if (startLine > 0) {
-            editor.foldingModel.addFoldRegion(0, startOffset, foldText)?.let { it.isExpanded = false }
-        }
-        if (endLine < document.lineCount - 1) {
-            editor.foldingModel.addFoldRegion(endOffset, document.textLength, foldText)?.let { it.isExpanded = false }
-        }
-    }
-}
-
-fun foldEditorInside(
-    startLine: Int,
-    endLine: Int,
-    editor: Editor,
-    document: Document,
-    foldText: String = "",
-    showFirstWord: Boolean = true,
-) {
-    val initialStartOffset = document.getLineStartOffset(startLine)
-    val endOffset = document.getLineEndOffset(endLine)
-    val startOffset =
-        if (showFirstWord) {
-            val lineText = document.charsSequence.subSequence(initialStartOffset, endOffset).toString()
-            val firstWordMatch = Regex("^(\\s*)(\\S+)\\s+").find(lineText)
-            if (firstWordMatch != null) {
-                initialStartOffset + firstWordMatch.groupValues[1].length + firstWordMatch.groupValues[2].length + 1
-            } else {
-                initialStartOffset
-            }
-        } else {
-            initialStartOffset
-        }
-    editor.scrollingModel.scrollToCaret(ScrollType.CENTER)
-
-    editor.foldingModel.runBatchFoldingOperation {
-        editor.foldingModel.addFoldRegion(startOffset, endOffset, foldText)?.let { it.isExpanded = false }
-    }
-}
-
-fun configureReadOnlyEditor(
-    editor: Editor,
-    showLineNumbers: Boolean = true,
-) {
-    editor.settings.apply {
-        additionalColumnsCount = 0
-        additionalLinesCount = 0
-        isAdditionalPageAtBottom = false
-        isVirtualSpace = false
-        isUseSoftWraps = true // things are weird if you set this to true
-        isLineMarkerAreaShown = false
-        setGutterIconsShown(false)
-        isLineNumbersShown = showLineNumbers
-        isCaretRowShown = false
-        isBlinkCaret = false
-        isCaretRowShown = false
-    }
-
-    if (editor is EditorEx) {
-        editor.isViewer = true
-    }
-}
-
-fun getSafeStartAndEndLines(
-    textRange: TextRange,
-    document: Document,
-): Pair<Int, Int> {
-    val startOffset = textRange.startOffset.coerceIn(0, document.textLength - 1)
-    val endOffset = textRange.endOffset.coerceIn(0, document.textLength - 1)
-    val startLine = document.getLineNumber(startOffset)
-    val endLine = document.getLineNumber(endOffset)
-    return Pair(startLine, endLine)
-}
-
-fun openFileInEditor(
-    project: Project,
-    relativePath: String,
-    line: Int? = null,
-    useAbsolutePath: Boolean = false,
-) {
-    val virtualFile =
-        if (useAbsolutePath) {
-            // Use relativePath as absolute path directly
-            LocalFileSystem.getInstance().findFileByPath(relativePath)
-        } else {
-            // Add disposal check before accessing project service
-            if (project.isDisposed) {
-                return
-            }
-
-            // Check if it's a non-project file first
-            val nonProjectService = SweepNonProjectFilesService.getInstance(project)
-            if (nonProjectService.isAllowedFile(relativePath)) {
-                // It's a non-project file, get it using the service
-                nonProjectService.getVirtualFileAssociatedWithAllowedFile(project, relativePath)
-            } else {
-                // It's a regular project file, use the existing approach
-                val basePath = project.basePath ?: return
-
-                val absolutePath =
-                    getAbsolutePathFromUri(relativePath) ?: run {
-                        if (!File(relativePath).isAbsolute) {
-                            Paths.get(basePath, relativePath).toString()
-                        } else {
-                            relativePath
-                        }
+                    } catch (e: UnsupportedOperationException) {
+                        false
                     }
-                LocalFileSystem.getInstance().findFileByPath(absolutePath)
-            }
-        } ?: return // Return if virtual file not found in either case
-
-    ApplicationManager.getApplication().invokeLater {
-        // Add project disposal guard to prevent ContainerDisposedException
-        if (project.isDisposed) {
-            return@invokeLater
         }
-
-        if (line != null) {
-            val fileEditorManager = FileEditorManager.getInstance(project)
-            val editor =
-                fileEditorManager.openTextEditor(
-                    OpenFileDescriptor(project, virtualFile, line - 1, 0),
-                    true,
-                )
-            // Scroll to the line
-            editor?.scrollingModel?.scrollTo(
-                LogicalPosition(line - 1, 0),
-                ScrollType.CENTER,
-            )
-        } else {
-            FileEditorManager.getInstance(project).openFile(virtualFile, false)
-        }
-    }
-}
-
-fun focusSweepTerminal(project: Project) {
-    ApplicationManager.getApplication().invokeLater {
-        // Add project disposal guard to prevent ContainerDisposedException
-        if (project.isDisposed) {
-            return@invokeLater
-        }
-
-        val toolWindowManager = ToolWindowManager.getInstance(project)
-        val terminalToolWindow = toolWindowManager.getToolWindow("Terminal")
-
-        terminalToolWindow?.let { toolWindow ->
-            // Show the terminal tool window if it's not visible
-            if (!toolWindow.isVisible) {
-                toolWindow.show()
-            }
-
-            // Activate the tool window to bring it to focus
-            toolWindow.activate(null)
-
-            // Find and select the "Sweep Terminal" tab
-            val contentManager = toolWindow.contentManager
-            val sweepTerminalContent = contentManager.findContent("Sweep Terminal")
-
-            sweepTerminalContent?.let { content ->
-                contentManager.setSelectedContent(content)
-            }
-        }
-    }
 }
 
 /**
- * Detects the shell type for the project by checking:
- * 1. If a Sweep Terminal exists, use its shell command
- * 2. Otherwise, use the terminal settings shellPath
- *
+ * Detects the shell type for the project by checking the terminal settings shellPath.
  * Returns a simple shell name like "bash", "zsh", "powershell", "fish", etc.
  * Returns empty string if unable to detect.
  */
 fun detectShellName(project: Project): String {
     return try {
-        // First, try to get shell from existing Sweep Terminal
-        val shellFromTerminal = getSweepTerminalShellCommand(project)
-        if (shellFromTerminal != null) {
-            return extractShellName(shellFromTerminal)
-        }
-
-        // Fall back to terminal settings
+        // Get shell from terminal settings
         val shellPath =
             TerminalProjectOptionsProvider
                 .getInstance(project)
@@ -643,13 +353,6 @@ fun detectShellName(project: Project): String {
  */
 fun detectShellPath(project: Project): String? {
     return try {
-        // First, try to get shell from existing Sweep Terminal
-        val shellFromTerminal = getSweepTerminalShellCommand(project)
-        if (!shellFromTerminal.isNullOrBlank()) {
-            return stripQuotes(shellFromTerminal)
-        }
-
-        // Fall back to terminal settings
         val shellPath =
             TerminalProjectOptionsProvider
                 .getInstance(project)
@@ -661,34 +364,8 @@ fun detectShellPath(project: Project): String? {
 }
 
 /**
- * Gets the shell command from an existing Sweep Terminal if one exists.
- * Returns null if no Sweep Terminal is found.
- */
-private fun getSweepTerminalShellCommand(project: Project): String? {
-    return try {
-        val toolWindowManager = ToolWindowManager.getInstance(project)
-        val terminalToolWindow = toolWindowManager.getToolWindow("Terminal") ?: return null
-        val contentManager = terminalToolWindow.contentManager
-        val sweepTerminalContent = contentManager.findContent("Sweep Terminal") ?: return null
-
-        val widget =
-            TerminalToolWindowManager
-                .findWidgetByContent(sweepTerminalContent) ?: return null
-
-        // Get shell command from the widget - it's a List<String> where first element is the shell path
-        widget.shellCommand?.firstOrNull()
-    } catch (e: Exception) {
-        null
-    }
-}
-
-/**
  * Strips surrounding quotes from a path string.
  * Handles both single and double quotes.
- * Examples:
- *   "C:\Program Files\Git\bin\bash.exe" -> C:\Program Files\Git\bin\bash.exe
- *   'C:\Program Files\Git\bin\bash.exe' -> C:\Program Files\Git\bin\bash.exe
- *   C:\Program Files\Git\bin\bash.exe -> C:\Program Files\Git\bin\bash.exe (unchanged)
  */
 private fun stripQuotes(path: String): String {
     val trimmed = path.trim()
@@ -703,15 +380,6 @@ private fun stripQuotes(path: String): String {
 
 /**
  * Extracts a simple shell name from a full shell path.
- * Examples:
- *   /bin/bash -> bash
- *   /usr/bin/zsh -> zsh
- *   /opt/homebrew/bin/zsh -> zsh
- *   powershell.exe -> powershell
- *   C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -> powershell
- *   pwsh.exe -> powershell
- *   cmd.exe -> cmd
- *   "C:\Program Files\Git\bin\bash.exe" -> bash (handles quoted paths)
  */
 fun extractShellName(shellPath: String): String {
     if (shellPath.isBlank()) return ""

@@ -14,11 +14,10 @@ import com.intellij.openapi.vcs.changes.Change
 import com.intellij.openapi.vcs.changes.ChangeListManager
 import com.intellij.openapi.vcs.ui.CommitMessage
 import com.intellij.serviceContainer.AlreadyDisposedException
-import dev.sweep.assistant.components.SweepConfig
-import dev.sweep.assistant.data.CommitMessageRequest
 import dev.sweep.assistant.settings.SweepSettings
 import dev.sweep.assistant.utils.*
 import kotlinx.serialization.json.*
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URI
 import java.util.concurrent.CancellationException
@@ -29,6 +28,10 @@ class DiffTooLargeException(val diffTokens: Int, val maxTokens: Int) : Exception
     "Diff too large: $diffTokens tokens exceeds maximum $maxTokens tokens. Please reduce the number of files in this commit."
 )
 
+/**
+ * Generates commit messages using the configured OpenAI-compatible LLM endpoint
+ * (see SweepSettings.commitMessageUrl / commitMessageModel).
+ */
 @Service(Service.Level.PROJECT)
 class SweepCommitMessageService(
     private val project: Project,
@@ -132,12 +135,12 @@ class SweepCommitMessageService(
                         if (partialChanges.isNotEmpty()) {
                             generateCombinedDiffString(latestChanges, partialChanges, project)
                         } else {
-                            generateDiffStringFromChanges(latestChanges, project)
+                            generateDiffStringFromChanges(latestChanges, project = project)
                         }
 
                     val unversionedDiff =
                         if (unversionedFiles.isNotEmpty()) {
-                            generateDiffStringFromUnversionedFiles(unversionedFiles, project)
+                            generateDiffStringFromUnversionedFiles(unversionedFiles, project = project)
                         } else {
                             ""
                         }
@@ -153,8 +156,9 @@ class SweepCommitMessageService(
             diffString = diffString.take(MAX_INPUT_TOKENS)
         }
 
+        val settings = SweepSettings.getInstance()
         var previousCommitsString =
-            if (!project.isDisposed && SweepConfig.getInstance(project).shouldUseCustomizedCommitMessages()) {
+            if (settings.useCustomizedCommitMessages) {
                 "Recent Commit Messages:\n" +
                     getRecentCommitMessages(project, maxCount = 20)
                         .filterNot { it.contains("merge pull request", ignoreCase = true) }
@@ -172,43 +176,30 @@ class SweepCommitMessageService(
         // Priority: Project-specific sweep-commit-template.md > Global ~/.sweep/sweep-commit-template.md
         val commitTemplate: String? =
             try {
-                SweepConfig.getInstance(project).getEffectiveCommitMessageRules()?.takeIf { it.isNotBlank() }
+                getEffectiveCommitMessageRules()?.takeIf { it.isNotBlank() }
             } catch (e: Exception) {
                 logger.warn("Failed to get commit message template: ${e.message}", e)
                 null
             }
-        val settings = SweepSettings.getInstance()
-        val commitMessageUrl = settings.commitMessageUrl.trimEnd('/')
+
+        val commitMessageUrl = settings.commitMessageUrl.trim().trimEnd('/')
         val commitMessageModel = settings.commitMessageModel
 
-        return try {
+        if (commitMessageUrl.isBlank()) {
+            logger.warn("Commit message LLM URL is not configured")
+            return ""
+        }
 
-            if (commitMessageUrl.isNotBlank()) {
-                logger.debug("Using OpenAI endpoint: $commitMessageUrl with model: $commitMessageModel")
-                val result = generateFromOpenAiCompatibleEndpoint(
-                    commitMessageUrl = commitMessageUrl,
-                    commitMessageModel = commitMessageModel,
-                    token = settings.githubToken,
-                    branch = currentBranch ?: "unknown",
-                    diffString = diffString,
-                    previousCommitsString = previousCommitsString,
-                    commitTemplate = commitTemplate,
-                )
-                if (result.isBlank()) {
-                    logger.warn("OpenAI endpoint returned empty response")
-                } else {
-                    logger.debug("Generated commit message: ${result.take(100)}...")
-                }
-                result
-            } else {
-                generateFromSweepEndpoint(
-                    diffString = diffString,
-                    previousCommitsString = previousCommitsString,
-                    branch = currentBranch ?: "",
-                    commitTemplate = commitTemplate,
-                    commitMessageModel = commitMessageModel,
-                )
-            }
+        return try {
+            logger.debug("Using OpenAI endpoint: $commitMessageUrl with model: $commitMessageModel")
+            generateFromOpenAiCompatibleEndpoint(
+                commitMessageUrl = commitMessageUrl,
+                commitMessageModel = commitMessageModel,
+                branch = currentBranch ?: "unknown",
+                diffString = diffString,
+                previousCommitsString = previousCommitsString,
+                commitTemplate = commitTemplate,
+            )
         } catch (e: Exception) {
             logger.warn("Failed to generate commit message: ${e.message}", e)
             ""
@@ -218,7 +209,6 @@ class SweepCommitMessageService(
     private fun generateFromOpenAiCompatibleEndpoint(
         commitMessageUrl: String,
         commitMessageModel: String,
-        token: String,
         branch: String,
         diffString: String,
         previousCommitsString: String,
@@ -257,6 +247,14 @@ class SweepCommitMessageService(
                 },
             )
             put("stream", false)
+            // 关闭推理模型的思考（reasoning），覆盖三类 OpenAI 兼容服务端：
+            // - llama.cpp（最新版）：顶层 chat_template_kwargs.enable_thinking（Jinja 模板参数）
+            // - DeepSeek API / 部分代理：顶层 enable_thinking
+            // - sglang / vLLM：extra_body.chat_template_kwargs.enable_thinking
+            put("enable_thinking", false)
+            putJsonObject("chat_template_kwargs") {
+                put("enable_thinking", false)
+            }
             putJsonObject("extra_body") {
                 putJsonObject("chat_template_kwargs") {
                     put("enable_thinking", false)
@@ -264,7 +262,7 @@ class SweepCommitMessageService(
             }
         }.toString()
 
-        return postJson("$commitMessageUrl/v1/chat/completions", token, requestBody) { response ->
+        return postJson("$commitMessageUrl/v1/chat/completions", requestBody) { response ->
             val choices = Json.parseToJsonElement(response).jsonObject["choices"]?.jsonArray
             choices
                 ?.firstOrNull()
@@ -279,44 +277,8 @@ class SweepCommitMessageService(
         }
     }
 
-    private fun generateFromSweepEndpoint(
-        diffString: String,
-        previousCommitsString: String,
-        branch: String,
-        commitTemplate: String?,
-        commitMessageModel: String,
-    ): String {
-        val request =
-            CommitMessageRequest(
-                context = diffString,
-                previous_commits = previousCommitsString,
-                branch = branch,
-                commit_template = commitTemplate,
-                model = commitMessageModel.takeIf { it.isNotBlank() },
-            )
-        val json = Json { encodeDefaults = true }
-        val postData = json.encodeToString(CommitMessageRequest.serializer(), request)
-
-        var connection: HttpURLConnection? = null
-        return try {
-            connection = getConnection("backend/create_commit_message").apply {
-                connectTimeout = 10000
-                readTimeout = 30000
-            }
-            connection.outputStream.use { os ->
-                os.write(postData.toByteArray())
-                os.flush()
-            }
-            val response = connection.inputStream.bufferedReader().use { it.readText() }
-            json.decodeFromString<Map<String, String>>(response)["commit_message"]?.trim().orEmpty()
-        } finally {
-            connection?.disconnect()
-        }
-    }
-
     private fun postJson(
         url: String,
-        token: String,
         body: String,
         parseResponse: (String) -> String,
     ): String {
@@ -328,9 +290,6 @@ class SweepCommitMessageService(
                 requestMethod = "POST"
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
-                if (token.isNotBlank()) {
-                    setRequestProperty("Authorization", "Bearer $token")
-                }
                 connectTimeout = 10000
                 readTimeout = 30000
             }
@@ -359,6 +318,37 @@ class SweepCommitMessageService(
         } finally {
             connection?.disconnect()
         }
+    }
+
+    /**
+     * Gets the effective commit message rules to use for commit message generation.
+     * Priority: Project-specific sweep-commit-template.md > Global commit message rules (~/.sweep/sweep-commit-template.md)
+     */
+    private fun getEffectiveCommitMessageRules(): String? {
+        // Project-specific template takes precedence
+        val basePath = project.osBasePath
+        if (basePath != null) {
+            val projectTemplate = File("$basePath/sweep-commit-template.md")
+            if (projectTemplate.exists()) {
+                try {
+                    return projectTemplate.readText()
+                } catch (e: Exception) {
+                    logger.warn("Failed to read project commit template", e)
+                }
+            }
+        }
+
+        // Fall back to global commit message rules
+        val globalRules = File("${System.getProperty("user.home")}/.sweep/sweep-commit-template.md")
+        if (globalRules.exists()) {
+            try {
+                return globalRules.readText()
+            } catch (e: Exception) {
+                logger.warn("Failed to read global commit template", e)
+            }
+        }
+
+        return null
     }
 
     private fun showErrorNotification(title: String, content: String) {

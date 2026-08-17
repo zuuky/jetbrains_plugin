@@ -30,14 +30,7 @@ import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.SystemInfo
-import com.intellij.psi.PsiComment
-import com.intellij.psi.PsiDocumentManager
-import com.intellij.psi.PsiElement
-import com.intellij.psi.PsiFile
-import com.intellij.psi.PsiManager
-import com.intellij.psi.PsiRecursiveElementWalkingVisitor
-import com.intellij.psi.PsiWhiteSpace
-import com.intellij.psi.SmartPointerManager
+import com.intellij.psi.*
 import com.intellij.psi.impl.source.resolve.FileContextUtil
 import com.intellij.psi.tree.IElementType
 import com.intellij.testFramework.LightVirtualFile
@@ -49,8 +42,8 @@ import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import dev.sweep.assistant.autocomplete.adjustFullContextForIde
 import dev.sweep.assistant.autocomplete.shouldRunAnnotatorsForSemanticHighlights
-import dev.sweep.assistant.components.SweepConfig
 import dev.sweep.assistant.settings.SweepMetaData
+import dev.sweep.assistant.settings.SweepSettings
 import dev.sweep.assistant.theme.SweepIcons
 import dev.sweep.assistant.theme.withAlpha
 import dev.sweep.assistant.utils.*
@@ -125,11 +118,10 @@ class GhostTextRenderer(
     private val hintFont = Font(Font.SANS_SERIF, Font.PLAIN, font.size - 1)
     private val shouldShowHint: Boolean
         get() {
-            val config = project?.let { SweepConfig.getInstance(it) }
-
+            val settings = SweepSettings.getInstance()
             val metadata = SweepMetaData.getInstance()
             // Show if user explicitly enabled it OR if user hasn't disabled it and they're within first 10 accepts
-            return showHint && (config?.isShowAutocompleteBadge() == true || metadata.autocompleteAcceptCount <= 3)
+            return showHint && (settings.showAutocompleteBadge || metadata.autocompleteAcceptCount <= 3)
         }
 
     // Cached values to avoid repeated calculations in paint()

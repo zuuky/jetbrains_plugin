@@ -121,9 +121,9 @@ class SweepStartupActivity :
         }, 10, TimeUnit.SECONDS)
         logStep("RecentEditsTracker.getInstance_DEFERRED")
 
-        // Auto-start local autocomplete server if enabled and not already running
+        // 未配置服务地址时，自动启动本地 autocomplete 服务器（若尚未运行）
         try {
-            if (SweepSettings.getInstance().autocompleteLocalMode) {
+            if (SweepSettings.getInstance().autocompleteRemoteUrl.isBlank()) {
                 ApplicationManager.getApplication().executeOnPooledThread {
                     logStep("autocomplete_pooledThread_START")
                     try {
@@ -160,39 +160,37 @@ class SweepStartupActivity :
     }
 
     private fun checkAutocompleteHealthOnStartup(project: Project) {
-        val settings = SweepSettings.getInstance()
-        if (settings.autocompleteLocalMode) {
-            ApplicationManager.getApplication().executeOnPooledThread {
-                try {
-                    val manager = LocalAutocompleteServerManager.getInstance()
-                    val healthy = manager.isServerHealthy()
-                    if (healthy) {
-                        logger.info("Autocomplete server is healthy: ${manager.getServerUrl()}")
-                    } else {
-                        val serverUrl = manager.getServerUrl()
-                        logger.warn("Autocomplete server is not reachable: $serverUrl")
-                        showNotification(
-                            project = project,
-                            title = "Autocomplete Server Unreachable",
-                            body = "Cannot connect to autocomplete server at $serverUrl. Check your network and server status.",
-                            notificationGroup = "Sweep Autocomplete",
-                            notificationType = NotificationType.WARNING,
-                            action =
-                                object : NotificationAction("Open Settings") {
-                                    override fun actionPerformed(
-                                        e: AnActionEvent,
-                                        notification: com.intellij.notification.Notification,
-                                    ) {
-                                        notification.expire()
-                                        ShowSettingsUtil.getInstance()
-                                            .showSettingsDialog(project, SweepSettingsConfigurable::class.java)
-                                    }
-                                },
-                        )
-                    }
-                } catch (e: Exception) {
-                    logger.warn("Failed to check autocomplete health on startup: ${e.message}")
+        // 启动时检查 next-edit 服务（配置的地址或本地服务）是否健康
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val manager = LocalAutocompleteServerManager.getInstance()
+                val healthy = manager.isServerHealthy()
+                if (healthy) {
+                    logger.info("Autocomplete server is healthy: ${manager.getServerUrl()}")
+                } else {
+                    val serverUrl = manager.getServerUrl()
+                    logger.warn("Autocomplete server is not reachable: $serverUrl")
+                    showNotification(
+                        project = project,
+                        title = "Autocomplete Server Unreachable",
+                        body = "Cannot connect to autocomplete server at $serverUrl. Check your network and server status.",
+                        notificationGroup = "Sweep Autocomplete",
+                        notificationType = NotificationType.WARNING,
+                        action =
+                            object : NotificationAction("Open Settings") {
+                                override fun actionPerformed(
+                                    e: AnActionEvent,
+                                    notification: com.intellij.notification.Notification,
+                                ) {
+                                    notification.expire()
+                                    ShowSettingsUtil.getInstance()
+                                        .showSettingsDialog(project, SweepSettingsConfigurable::class.java)
+                                }
+                            },
+                    )
                 }
+            } catch (e: Exception) {
+                logger.warn("Failed to check autocomplete health on startup: ${e.message}")
             }
         }
     }

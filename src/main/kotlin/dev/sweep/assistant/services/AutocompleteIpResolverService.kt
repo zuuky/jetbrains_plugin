@@ -9,7 +9,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.util.concurrency.annotations.RequiresBackgroundThread
 import dev.sweep.assistant.autocomplete.edit.NextEditAutocompleteRequest
 import dev.sweep.assistant.autocomplete.edit.NextEditAutocompleteResponse
-import dev.sweep.assistant.settings.SweepSettings
 import dev.sweep.assistant.utils.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -67,10 +66,8 @@ class AutocompleteIpResolverService(
     @RequiresBackgroundThread
     suspend fun fetchNextEditAutocomplete(request: NextEditAutocompleteRequest): NextEditAutocompleteResponse? =
         try {
-            val isLocalMode = SweepSettings.getInstance().autocompleteLocalMode
-            if (isLocalMode) {
-                LocalAutocompleteServerManager.getInstance().ensureServerRunning()
-            }
+            // 当地址留空时确保本地服务已启动（配置了远程地址时该调用内部自动跳过）。
+            LocalAutocompleteServerManager.getInstance().ensureServerRunning()
 
             val postData = encodeString(request, NextEditAutocompleteRequest.serializer())
             val postDataBytes = postData.toByteArray(Charsets.UTF_8)
@@ -125,53 +122,45 @@ class AutocompleteIpResolverService(
 
             var result: NextEditAutocompleteResponse? = null
 
-            if (isLocalMode) {
-                // For local mode, read line-by-line to handle server crashes mid-stream gracefully
-                try {
-                    response.body().bufferedReader().use { reader ->
-                        var line: String?
-                        while (reader.readLine().also { line = it } != null) {
-                            val l = line ?: continue
-                            if (l.isBlank()) continue
-                            try {
-                                val jsonElement = defaultJson.parseToJsonElement(l)
-                                if (jsonElement is JsonObject && jsonElement.containsKey("status")) {
-                                    val status = jsonElement["status"]?.jsonPrimitive?.contentOrNull
-                                    if (status == "error") {
-                                        val errorMsg = jsonElement["error"]?.jsonPrimitive?.contentOrNull ?: "Unknown error"
-                                        logger.warn("Local autocomplete server error: $errorMsg")
-                                        continue
-                                    }
+            // 统一按行解析（兼容本地/远程服务，可优雅处理服务端流中断）
+            try {
+                response.body().bufferedReader().use { reader ->
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        val l = line ?: continue
+                        if (l.isBlank()) continue
+                        try {
+                            val jsonElement = defaultJson.parseToJsonElement(l)
+                            if (jsonElement is JsonObject && jsonElement.containsKey("status")) {
+                                val status = jsonElement["status"]?.jsonPrimitive?.contentOrNull
+                                if (status == "error") {
+                                    val errorMsg = jsonElement["error"]?.jsonPrimitive?.contentOrNull ?: "Unknown error"
+                                    logger.warn("Autocomplete server error: $errorMsg")
+                                    continue
                                 }
-                                result = defaultJson.decodeFromString(NextEditAutocompleteResponse.serializer(), l)
-                            } catch (e: Exception) {
-                                logger.warn("Error parsing local server response: ${e.message}")
                             }
+                            result = defaultJson.decodeFromString(NextEditAutocompleteResponse.serializer(), l)
+                        } catch (e: Exception) {
+                            logger.warn("Error parsing autocomplete server response: ${e.message}")
                         }
                     }
-                } catch (e: java.io.IOException) {
-                    // Server closed the stream (crash, broken pipe, etc.)
-                    // Process whatever we got before the closure
-                    logger.info("Local server stream closed: ${e.message}")
                 }
+            } catch (e: java.io.IOException) {
+                // Server closed the stream (crash, broken pipe, etc.)
+                // Process whatever we got before the closure
+                logger.info("Autocomplete server stream closed: ${e.message}")
+            }
 
-                if (result != null) {
-                    LocalAutocompleteServerManager.getInstance().reportSuccess()
-                } else {
-                    LocalAutocompleteServerManager.getInstance().reportFailure()
-                }
+            if (result != null) {
+                LocalAutocompleteServerManager.getInstance().reportSuccess()
             } else {
-                response.streamJson<NextEditAutocompleteResponse>().collect {
-                    result = it
-                }
+                LocalAutocompleteServerManager.getInstance().reportFailure()
             }
 
             result
         } catch (e: Exception) {
             logger.warn("Error fetching next edit autocomplete: ${e.message}")
-            if (SweepSettings.getInstance().autocompleteLocalMode) {
-                LocalAutocompleteServerManager.getInstance().reportFailure()
-            }
+            LocalAutocompleteServerManager.getInstance().reportFailure()
             throw e
         }
 

@@ -9,8 +9,7 @@ import com.intellij.ui.EditorNotificationProvider
 import com.intellij.ui.EditorNotifications
 import dev.sweep.assistant.settings.SweepSettings
 import dev.sweep.assistant.settings.SweepSettingsConfigurable
-import dev.sweep.assistant.utils.matchesExclusionPattern
-import java.io.File
+import dev.sweep.assistant.utils.shouldExcludeFromAutocomplete
 import java.util.function.Function
 import javax.swing.JComponent
 
@@ -38,16 +37,8 @@ class AutocompleteExclusionNotificationProvider : EditorNotificationProvider {
             return false
         }
 
-        // Check if this file matches any exclusion pattern
-        val exclusionPatterns = settings.allAutocompleteExclusionPatterns()
-        if (exclusionPatterns.isEmpty()) {
-            return false
-        }
-
-        val fileName = File(file.path).name
-        return exclusionPatterns.any { pattern ->
-            matchesExclusionPattern(fileName, pattern)
-        }
+        // 命中用户配置或项目 .gitignore 的排除模式（支持文件夹）
+        return shouldExcludeFromAutocomplete(project, file.path)
     }
 
     private fun createNotificationPanel(
@@ -56,7 +47,7 @@ class AutocompleteExclusionNotificationProvider : EditorNotificationProvider {
     ): EditorNotificationPanel {
         val panel = EditorNotificationPanel(EditorNotificationPanel.Status.Info)
 
-        panel.text = "Sweep autocomplete is disabled for this file type."
+        panel.text = "Sweep autocomplete is disabled for this file (matched an exclusion pattern or .gitignore)."
 
         panel.createActionLabel("Don't Show Again") {
             SweepSettings.getInstance().hideAutocompleteExclusionBanner = true

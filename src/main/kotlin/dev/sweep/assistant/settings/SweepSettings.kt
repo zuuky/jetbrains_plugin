@@ -118,18 +118,21 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
 
     /// Server configuration for next-edit
 
-    var autocompleteLocalMode: Boolean = true
-
+    /**
+     * 本地端口（高级）：仅在 [autocompleteRemoteUrl] 留空时生效。
+     * 此时插件会尝试在本机用 uvx sweep-autocomplete 启动服务并监听该端口，
+     * next-edit 请求发往 http://localhost:<autocompleteLocalPort>。
+     */
     var autocompleteLocalPort: Int = DEFAULT_AUTOCOMPLETE_PORT
 
     /**
-     * Remote autocomplete server URL (e.g. http://gpu-server:8006).
-     * When set and autocompleteLocalMode is true, connects to this URL
-     * instead of starting a local uvx sweep-autocomplete process.
+     * Next-Edit 服务地址（大模型服务地址）。
+     * 填写后插件直接向该地址发送 next-edit 请（http://.../backend/next_edit_autocomplete），
+     * 不再启动本地服务。留空则回退到本机 http://localhost:<autocompleteLocalPort>（自动拉起本地服务）。
      */
     var autocompleteRemoteUrl: String = "http://10.218.230.4:$autocompleteLocalPort"
 
-    /** Returns the effective autocomplete server URL. Priority: remote URL > localhost. */
+    /** Returns the effective autocomplete server URL. Priority: 服务地址 > 本机 localhost。 */
     fun getEffectiveAutocompleteUrl(): String {
         val remoteUrl = autocompleteRemoteUrl.trim()
         if (remoteUrl.isNotBlank()) return remoteUrl
@@ -156,6 +159,9 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
 
     // Autocomplete exclusion patterns - files matching these patterns won't trigger autocomplete.
     // v2 is additive; the getter merges v1 and v2 so existing users keep their patterns and get .env added.
+    /** 是否自动将项目 .gitignore 中的模式并入自动补全排除（默认开启）。 */
+    var excludeGitignorePatterns: Boolean = true
+
     var autocompleteExclusionPatterns: Set<String> = emptySet()
 
     var autocompleteExclusionPatternsV2: Set<String> = setOf(".env")

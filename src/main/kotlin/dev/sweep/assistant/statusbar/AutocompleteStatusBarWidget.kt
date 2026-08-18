@@ -99,13 +99,9 @@ class AutocompleteStatusBarWidget(
 
     override fun getTooltipText(): String {
         val settings = SweepSettings.getInstance()
-        return if (settings.autocompleteLocalMode) {
-            val remoteUrl = settings.autocompleteRemoteUrl
-            if (remoteUrl.isNotBlank()) {
-                "Sweep Autocomplete: Remote ($remoteUrl) - Click for options"
-            } else {
-                "Sweep Autocomplete: Local Mode - Click for options"
-            }
+        val remoteUrl = settings.autocompleteRemoteUrl
+        return if (remoteUrl.isNotBlank()) {
+            "Sweep Autocomplete: Remote ($remoteUrl) - Click for options"
         } else if (snoozeService.isAutocompleteSnooze()) {
             "Sweep Autocomplete: Snoozed (${snoozeService.formatRemainingTime()} remaining) - Click for options"
         } else if (isAlive) {
@@ -139,11 +135,8 @@ class AutocompleteStatusBarWidget(
         val menuItems = mutableListOf<String>()
         val actions = mutableListOf<() -> Unit>()
 
-        val isLocalMode = SweepSettings.getInstance().autocompleteLocalMode
-
         val accessStatus =
             when {
-                isLocalMode -> if (isAlive) "Local Mode" else "Local Mode (Offline)"
                 snoozeService.isAutocompleteSnooze() -> {
                     val remaining = snoozeService.formatRemainingTime()
                     "🔄 Snoozed ($remaining remaining)"

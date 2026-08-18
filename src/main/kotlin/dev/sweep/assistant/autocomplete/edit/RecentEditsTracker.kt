@@ -48,7 +48,6 @@ import java.awt.event.FocusEvent
 import java.awt.event.FocusListener
 import java.awt.event.WindowEvent
 import java.awt.event.WindowFocusListener
-import java.io.File
 import java.util.*
 import java.util.Queue
 import java.util.concurrent.ConcurrentHashMap
@@ -1830,18 +1829,11 @@ class RecentEditsTracker(
     }
 
     /**
-     * Check if the given file path matches any of the autocomplete exclusion patterns
+     * Check if the given file path matches any exclusion pattern
+     * (includes user-configured patterns and the project `.gitignore`, supports folders).
      */
-    private fun shouldExcludeFromAutocomplete(filePath: String): Boolean {
-        val exclusionPatterns = SweepSettings.getInstance().allAutocompleteExclusionPatterns()
-        if (exclusionPatterns.isEmpty()) return false
-
-        val fileName = File(filePath).name
-
-        return exclusionPatterns.any { pattern ->
-            matchesExclusionPattern(fileName, pattern)
-        }
-    }
+    private fun shouldExcludeFromAutocomplete(filePath: String): Boolean =
+        dev.sweep.assistant.utils.shouldExcludeFromAutocomplete(project, filePath)
 
     /**
      * Check if the user is currently in a template or refactoring UI

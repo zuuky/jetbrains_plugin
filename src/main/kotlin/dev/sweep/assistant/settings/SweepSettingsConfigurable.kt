@@ -1,10 +1,10 @@
 package dev.sweep.assistant.settings
 
-import com.intellij.notification.NotificationGroupManager
-import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
 import dev.sweep.assistant.services.LocalAutocompleteServerManager
@@ -16,7 +16,7 @@ import javax.swing.*
 /**
  * Settings page (Settings -> Tools -> Sweep) for configuring:
  * - next-edit 自动补全（开关、防抖、徽章、排除文件）
- * - next-edit 服务器（本地端口 / 远程 GPU 服务器 / 测试连接）
+ * - next-edit 服务地址（大模型服务地址 / 测试连接）
  * - commit message 大模型（URL、模型 / 测试连接）
  */
 class SweepSettingsConfigurable(
@@ -24,16 +24,19 @@ class SweepSettingsConfigurable(
 ) : Configurable {
     private val settings = SweepSettings.getInstance()
 
+    // 设置页面根组件，作为测试结果对话框的父窗口（保证弹窗显示在当前设置页之上）
+    private lateinit var uiRoot: JPanel
+
     // Next-edit fields
     private var nextEditEnabledCheckBox: JCheckBox? = null
     private var acceptWordOnRightArrowCheckBox: JCheckBox? = null
     private var showAutocompleteBadgeCheckBox: JCheckBox? = null
     private var debounceSpinner: JSpinner? = null
     private var exclusionPatternsField: JTextField? = null
+    private var excludeGitignoreCheckBox: JCheckBox? = null
     private var disableConflictingPluginsCheckBox: JCheckBox? = null
 
     // Server fields
-    private var localModeCheckBox: JCheckBox? = null
     private var localPortField: JTextField? = null
     private var remoteUrlField: JTextField? = null
     private var serverStatusLabel: JLabel? = null
@@ -46,76 +49,107 @@ class SweepSettingsConfigurable(
     override fun getDisplayName(): String = "Sweep"
 
     override fun createComponent(): JComponent {
-        val panel = JPanel(BorderLayout())
-        panel.border = JBUI.Borders.empty(20)
+        val panel = JPanel()
+        panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
+        panel.border = JBUI.Borders.empty(16, 20, 16, 20)
+        uiRoot = panel
 
-        val centerPanel = JPanel()
-        centerPanel.layout = BoxLayout(centerPanel, BoxLayout.Y_AXIS)
-        panel.add(centerPanel, BorderLayout.CENTER)
+        // ------- 标题 -------
+        panel.add(
+            JLabel("Sweep 设置").apply {
+                font = font.deriveFont(Font.BOLD, 18f)
+                alignmentX = Component.LEFT_ALIGNMENT
+            },
+        )
+        panel.add(verticalSpace(4))
+        panel.add(
+            JLabel("配置本地 next-edit 自动补全，以及生成 commit message 使用的大模型信息。").apply {
+                font = font.deriveFont(13f)
+                foreground = JBColor.GRAY
+                alignmentX = Component.LEFT_ALIGNMENT
+            },
+        )
+        panel.add(verticalSpace(16))
 
-        val title = JLabel("Sweep 设置")
-        title.font = title.font.deriveFont(Font.BOLD, 18f)
-        title.alignmentX = Component.LEFT_ALIGNMENT
-        centerPanel.add(title)
-        centerPanel.add(verticalSpace(6))
+        // ------- Next-Edit 自动补全 -------
+        panel.add(createNextEditSection())
+        panel.add(verticalSpace(12))
 
-        val subtitle = JLabel("配置本地 next-edit 自动补全与生成 commit message 使用的大模型信息。")
-        subtitle.font = subtitle.font.deriveFont(13f)
-        subtitle.foreground = JBColor.GRAY
-        subtitle.alignmentX = Component.LEFT_ALIGNMENT
-        centerPanel.add(subtitle)
-        centerPanel.add(verticalSpace(18))
+        // ------- Next-Edit 服务 -------
+        panel.add(createServerSection())
+        panel.add(verticalSpace(12))
 
-        // ============ Next-Edit (Autocomplete) ============
-        centerPanel.add(sectionTitle("Next-Edit 自动补全"))
-        centerPanel.add(verticalSpace(4))
+        // ------- Commit Message LLM -------
+        panel.add(createCommitMessageSection())
+        panel.add(verticalSpace(16))
+
+        // ------- 底部提示 -------
+        panel.add(
+            JLabel("<html><font color='gray'>提示：Tab 接受补全 / Esc 拒绝补全的快捷键可在 Settings - Keymap 中搜索“Accept Edit Completion”/“Reject Edit Completion”自定义。</font></html>").apply {
+                font = font.deriveFont(12f)
+                alignmentX = Component.LEFT_ALIGNMENT
+            },
+        )
+
+        // 打开页面时后台刷新一次服务器状态
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val healthy = LocalAutocompleteServerManager.getInstance().isServerHealthy()
+            val url = LocalAutocompleteServerManager.getInstance().getServerUrl()
+            // 指定模态状态：设置页是模态对话框，必须在该模态范围内执行，否则会被挂起到关闭设置页之后
+            ApplicationManager.getApplication().invokeLater(
+                { updateServerStatus(healthy, url) },
+                ModalityState.stateForComponent(panel),
+            )
+        }
+
+        return panel
+    }
+
+    // ===================================================================
+    // 各分区
+    // ===================================================================
+
+    private fun createNextEditSection(): JPanel {
+        val card = card("Next-Edit 自动补全")
+        var row = 0
 
         nextEditEnabledCheckBox =
             JCheckBox("启用 next-edit 自动补全", settings.nextEditPredictionFlagOn).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
                 addActionListener { settings.nextEditPredictionFlagOn = isSelected }
             }
-        centerPanel.add(nextEditEnabledCheckBox!!)
+        addCheckBoxRow(card, nextEditEnabledCheckBox!!, row++)
 
         acceptWordOnRightArrowCheckBox =
-            JCheckBox("按 Alt+Right 接受下一个词", settings.acceptWordOnRightArrow).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
+            JCheckBox("按 Alt + Right 接受下一个词", settings.acceptWordOnRightArrow).apply {
                 addActionListener { settings.acceptWordOnRightArrow = isSelected }
             }
-        centerPanel.add(acceptWordOnRightArrowCheckBox!!)
+        addCheckBoxRow(card, acceptWordOnRightArrowCheckBox!!, row++)
 
         showAutocompleteBadgeCheckBox =
             JCheckBox("在补全提示旁显示 “Tab to accept” 徽章", settings.showAutocompleteBadge).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
                 addActionListener { settings.showAutocompleteBadge = isSelected }
             }
-        centerPanel.add(showAutocompleteBadgeCheckBox!!)
+        addCheckBoxRow(card, showAutocompleteBadgeCheckBox!!, row++)
 
         disableConflictingPluginsCheckBox =
             JCheckBox("自动禁用冲突的补全插件（Copilot / Tabnine 等）", settings.disableConflictingPlugins).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
                 addActionListener { settings.disableConflictingPlugins = isSelected }
             }
-        centerPanel.add(disableConflictingPluginsCheckBox!!)
+        addCheckBoxRow(card, disableConflictingPluginsCheckBox!!, row++)
 
-        centerPanel.add(verticalSpace(8))
+        addSpacerRow(card, row++)
 
-        // Debounce
         val initialDebounce = settings.getEffectiveDebounceMs().toInt()
         debounceSpinner =
             JSpinner(SpinnerNumberModel(initialDebounce, 10, 1000, 10)).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
-                maximumSize = Dimension(180, preferredSize.height)
-                addChangeListener { settings.autocompleteDebounceMs = (value as Int).toLong() }
+                maximumSize = Dimension(160, preferredSize.height)
+            }.also { spinner ->
+                spinner.addChangeListener { settings.autocompleteDebounceMs = (spinner.value as Int).toLong() }
             }
-        centerPanel.add(formRow("防抖延迟（毫秒）", debounceSpinner!!, "输入停顿多久后触发补全请求"))
+        addFieldRow(card, "防抖延迟（毫秒）", debounceSpinner!!, row++)
 
-        // Exclusion patterns
-        val effectivePatterns = settings.allAutocompleteExclusionPatterns().sorted().joinToString(", ")
         exclusionPatternsField =
-            JTextField(effectivePatterns).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
-                maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+            JTextField(settings.allAutocompleteExclusionPatterns().sorted().joinToString(", "), 30).apply {
                 addFocusListener(
                     object : java.awt.event.FocusAdapter() {
                         override fun focusLost(e: java.awt.event.FocusEvent?) {
@@ -124,34 +158,41 @@ class SweepSettingsConfigurable(
                     },
                 )
             }
-        centerPanel.add(
-            formRow(
-                "排除的文件模式",
-                exclusionPatternsField!!,
-                "匹配这些模式的文件不会触发自动补全，多个模式用逗号分隔（如 .env, *.min.js）",
-            ),
+        addFieldRow(card, "排除的文件模式", exclusionPatternsField!!, row++)
+
+        excludeGitignoreCheckBox =
+            JCheckBox("自动排除项目 .gitignore 中的文件与文件夹", settings.excludeGitignorePatterns).apply {
+                addActionListener { settings.excludeGitignorePatterns = isSelected }
+            }
+        addCheckBoxRow(card, excludeGitignoreCheckBox!!, row++)
+        addHintRow(
+            card,
+            "上方模式支持文件与文件夹（如 .env、node_modules、build/**），多个用逗号分隔。勾选后自动并入 .gitignore 中的模式。",
+            row++,
         )
 
-        centerPanel.add(verticalSpace(18))
+        return card
+    }
 
-        // ============ Autocomplete Server ============
-        centerPanel.add(sectionTitle("Next-Edit 服务器"))
-        centerPanel.add(verticalSpace(4))
+    private fun createServerSection(): JPanel {
+        val card = card("Next-Edit 服务")
+        var row = 0
 
-        localModeCheckBox =
-            JCheckBox("本地模式", settings.autocompleteLocalMode).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
-                addActionListener {
-                    settings.autocompleteLocalMode = isSelected
-                    updateServerFieldsEnabledState()
-                }
+        remoteUrlField =
+            JTextField(settings.autocompleteRemoteUrl, 40).apply {
+                addFocusListener(
+                    object : java.awt.event.FocusAdapter() {
+                        override fun focusLost(e: java.awt.event.FocusEvent?) {
+                            settings.autocompleteRemoteUrl = text.trim()
+                        }
+                    },
+                )
             }
-        centerPanel.add(localModeCheckBox!!)
+        addFieldRow(card, "Next-Edit 服务地址（大模型服务地址）", remoteUrlField!!, row++)
 
         localPortField =
             JTextField(settings.autocompleteLocalPort.toString(), 8).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
-                maximumSize = Dimension(180, preferredSize.height)
+                maximumSize = Dimension(120, preferredSize.height)
                 addFocusListener(
                     object : java.awt.event.FocusAdapter() {
                         override fun focusLost(e: java.awt.event.FocusEvent?) {
@@ -163,69 +204,52 @@ class SweepSettingsConfigurable(
                     },
                 )
             }
-        centerPanel.add(formRow("本地端口", localPortField!!, "本地 uvx sweep-autocomplete 服务监听端口"))
-
-        remoteUrlField =
-            JTextField(settings.autocompleteRemoteUrl, 30).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
-                maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
-                addFocusListener(
-                    object : java.awt.event.FocusAdapter() {
-                        override fun focusLost(e: java.awt.event.FocusEvent?) {
-                            settings.autocompleteRemoteUrl = text.trim()
-                        }
-                    },
-                )
-            }
-        centerPanel.add(
-            formRow(
-                "远程服务器 URL",
-                remoteUrlField!!,
-                "可选：远程 GPU 服务器地址（如 http://gpu-server:8006）。留空则使用本地服务。",
-            ),
+        addFieldRow(card, "本地端口（高级）", localPortField!!, row++)
+        addHintRow(
+            card,
+            "填写服务地址后插件直接使用该地址；留空则自动启用本机服务并监听上方端口（默认 8006）。",
+            row++,
         )
 
-        // Server status + test buttons row
-        val serverButtonsRow = JPanel()
-        serverButtonsRow.layout = BoxLayout(serverButtonsRow, BoxLayout.X_AXIS)
-        serverButtonsRow.alignmentX = Component.LEFT_ALIGNMENT
-
-        val statusLabel = JLabel("")
-        statusLabel.font = statusLabel.font.deriveFont(12f)
-        statusLabel.foreground = JBColor.GRAY
-        serverStatusLabel = statusLabel
-        serverButtonsRow.add(statusLabel)
-        serverButtonsRow.add(Box.createHorizontalGlue())
-
-        val checkServerButton = JButton("测试连接").apply {
-            addActionListener { testAutocompleteServer() }
-        }
-        serverButtonsRow.add(checkServerButton)
-
-        val startServerButton = JButton("在终端启动本地服务器").apply {
-            addActionListener {
-                LocalAutocompleteServerManager.getInstance().startServerInTerminal(project)
+        // 状态 + 按钮行
+        serverStatusLabel =
+            JLabel("——").apply {
+                foreground = JBColor.GRAY
             }
-        }
-        serverButtonsRow.add(Box.createRigidArea(Dimension(8, 0)))
-        serverButtonsRow.add(startServerButton)
 
-        centerPanel.add(serverButtonsRow)
-        centerPanel.add(verticalSpace(6))
-        centerPanel.add(
-            hintLabel("“测试连接”检查 next-edit 服务器（远程或本地）的 /health 端点是否可达。"),
+        val buttons = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
+        buttons.add(
+            JButton("测试连接").apply {
+                addActionListener { testAutocompleteServer() }
+            },
+        )
+        buttons.add(
+            JButton("在终端启动本地服务器").apply {
+                addActionListener {
+                    LocalAutocompleteServerManager.getInstance().startServerInTerminal(project)
+                }
+            },
         )
 
-        centerPanel.add(verticalSpace(18))
+        val statusContainer = JPanel(FlowLayout(FlowLayout.LEFT, 0, 3))
+        statusContainer.add(serverStatusLabel!!)
 
-        // ============ Commit Message LLM ============
-        centerPanel.add(sectionTitle("生成 Commit Message 的大模型"))
-        centerPanel.add(verticalSpace(4))
+        // “状态：xx | 按钮”
+        val statusBar = JPanel(FlowLayout(FlowLayout.LEFT, 10, 0))
+        statusBar.add(statusContainer)
+        statusBar.add(buttons)
+        addFullRow(card, statusBar, row++)
+        addHintRow(card, "“测试连接”检查 next-edit 服务（远程地址或本地服务）的 /health 端点是否可达。", row++)
+
+        return card
+    }
+
+    private fun createCommitMessageSection(): JPanel {
+        val card = card("生成 Commit Message 的大模型")
+        var row = 0
 
         commitMessageUrlField =
-            JTextField(settings.commitMessageUrl, 30).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
-                maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+            JTextField(settings.commitMessageUrl, 40).apply {
                 addFocusListener(
                     object : java.awt.event.FocusAdapter() {
                         override fun focusLost(e: java.awt.event.FocusEvent?) {
@@ -234,18 +258,24 @@ class SweepSettingsConfigurable(
                     },
                 )
             }
-        centerPanel.add(
-            formRow(
-                "LLM 服务地址",
-                commitMessageUrlField!!,
-                "OpenAI 兼容的 LLM 端点，如 http://llm-server:8000。生成 commit message 时调用该服务的 /v1/chat/completions。",
-            ),
+        addFieldRow(
+            card,
+            "LLM 服务地址",
+            commitMessageUrlField!!,
+            row++,
+            trailing =
+                JButton("测试连接").apply {
+                    addActionListener { testCommitMessageServer() }
+                },
+        )
+        addHintRow(
+            card,
+            "OpenAI 兼容端点，如 http://llm-server:8000。生成 commit message 时调用该服务的 /v1/chat/completions。",
+            row++,
         )
 
         commitMessageModelField =
-            JTextField(settings.commitMessageModel, 20).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
-                maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+            JTextField(settings.commitMessageModel, 25).apply {
                 addFocusListener(
                     object : java.awt.event.FocusAdapter() {
                         override fun focusLost(e: java.awt.event.FocusEvent?) {
@@ -254,62 +284,132 @@ class SweepSettingsConfigurable(
                     },
                 )
             }
-        centerPanel.add(formRow("模型名称", commitMessageModelField!!, "用于生成 commit message 的模型名"))
+        addFieldRow(card, "模型名称", commitMessageModelField!!, row++)
 
         useCustomizedCommitMessagesCheckBox =
             JCheckBox("参考最近的提交风格（最近 10 条 commit message）", settings.useCustomizedCommitMessages).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
                 addActionListener { settings.useCustomizedCommitMessages = isSelected }
             }
-        centerPanel.add(useCustomizedCommitMessagesCheckBox!!)
+        addCheckBoxRow(card, useCustomizedCommitMessagesCheckBox!!, row++)
 
-        val commitTestRow = JPanel()
-        commitTestRow.layout = BoxLayout(commitTestRow, BoxLayout.X_AXIS)
-        commitTestRow.alignmentX = Component.LEFT_ALIGNMENT
-        commitTestRow.add(JLabel(""))
-        commitTestRow.add(Box.createHorizontalGlue())
-        val testCommitButton = JButton("测试连接").apply {
-            addActionListener { testCommitMessageServer() }
+        addHintRow(card, "“测试连接”检查 LLM 服务是否可达（依次尝试 /v1/models、/health、根路径）。", row++)
+
+        return card
+    }
+
+    // ===================================================================
+    // GridBagLayout 行辅助（两列：标签 | 控件，控件列水平填充）
+    // ===================================================================
+
+    private fun card(title: String): JPanel =
+        JPanel(GridBagLayout()).apply {
+            border =
+                BorderFactory.createCompoundBorder(
+                    BorderFactory.createTitledBorder(BorderFactory.createEtchedBorder(), title),
+                    JBUI.Borders.empty(10, 12, 8, 12),
+                )
+            alignmentX = Component.LEFT_ALIGNMENT
         }
-        commitTestRow.add(testCommitButton)
-        centerPanel.add(commitTestRow)
-        centerPanel.add(verticalSpace(6))
-        centerPanel.add(
-            hintLabel("“测试连接”检查 LLM 服务是否可达（尝试访问 /v1/models 或 /health 端点）。"),
-        )
 
-        centerPanel.add(verticalSpace(18))
-        centerPanel.add(
-            hintLabel(
-                "提示：Tab 接受补全 / Esc 拒绝补全的快捷键可在 Settings - Keymap 中搜索 “Accept Edit Completion” / “Reject Edit Completion” 自定义。",
-            ),
-        )
+    private fun rowConstraints(row: Int): GridBagConstraints =
+        GridBagConstraints().apply {
+            gridy = row
+            fill = GridBagConstraints.HORIZONTAL
+            anchor = GridBagConstraints.WEST
+            insets = Insets(3, 0, 3, 0)
+        }
 
-        updateServerFieldsEnabledState()
+    /** 单行、跨两列：CheckBox 等。 */
+    private fun addCheckBoxRow(
+        card: JPanel,
+        checkBox: JCheckBox,
+        row: Int,
+    ) {
+        val c = rowConstraints(row)
+        c.gridx = 0
+        c.gridwidth = GridBagConstraints.REMAINDER
+        c.weightx = 1.0
+        card.add(checkBox, c)
+    }
 
-        // Kick off a background status refresh when the page opens
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val healthy = LocalAutocompleteServerManager.getInstance().isServerHealthy()
-            val url = LocalAutocompleteServerManager.getInstance().getServerUrl()
-            ApplicationManager.getApplication().invokeLater {
-                if (healthy) {
-                    serverStatusLabel?.text = "服务器运行中：$url"
-                    serverStatusLabel?.foreground = JBColor(Color(0, 128, 0), Color(80, 200, 80))
-                } else {
-                    serverStatusLabel?.text = "服务器未运行：$url"
-                    serverStatusLabel?.foreground = JBColor.RED
-                }
+    /** 两列行：label（固定宽度）+ field（填充），可附尾随组件（如测试按钮）。 */
+    private fun addFieldRow(
+        card: JPanel,
+        labelText: String,
+        field: JComponent,
+        row: Int,
+        trailing: JComponent? = null,
+    ) {
+        val label = JLabel(labelText)
+        label.font = JBUI.Fonts.label().deriveFont(13f)
+
+        val c = rowConstraints(row)
+        c.gridx = 0
+        c.weightx = 0.0
+        c.insets = Insets(3, 0, 3, 10)
+        card.add(label, c)
+
+        c.gridx = 1
+        c.weightx = 1.0
+        c.insets = Insets(3, 0, 3, 0)
+        card.add(field, c)
+
+        if (trailing != null) {
+            c.gridx = 2
+            c.weightx = 0.0
+            c.insets = Insets(3, 8, 3, 0)
+            c.fill = GridBagConstraints.NONE
+            card.add(trailing, c)
+        }
+    }
+
+    /** 蓝色说明行（跨两列）。 */
+    private fun addHintRow(
+        card: JPanel,
+        text: String,
+        row: Int,
+    ) {
+        val hint =
+            JLabel("<html><font color='gray'>$text</font></html>").apply {
+                font = font.deriveFont(12f)
             }
-        }
-
-        return panel
+        val c = rowConstraints(row)
+        c.gridx = 0
+        c.gridwidth = GridBagConstraints.REMAINDER
+        c.weightx = 1.0
+        card.add(hint, c)
     }
 
-    private fun updateServerFieldsEnabledState() {
-        val localMode = localModeCheckBox?.isSelected ?: true
-        localPortField?.isEnabled = localMode
-        remoteUrlField?.isEnabled = localMode
+    /** 空白行。 */
+    private fun addSpacerRow(
+        card: JPanel,
+        row: Int,
+    ) {
+        val c = rowConstraints(row)
+        c.gridx = 0
+        c.gridwidth = GridBagConstraints.REMAINDER
+        c.weightx = 1.0
+        card.add(Box.createVerticalStrut(4), c)
     }
+
+    /** 跨两列放入任意组件（如按钮行）。 */
+    private fun addFullRow(
+        card: JPanel,
+        component: JComponent,
+        row: Int,
+    ) {
+        val c = rowConstraints(row)
+        c.gridx = 0
+        c.gridwidth = GridBagConstraints.REMAINDER
+        c.weightx = 1.0
+        card.add(component, c)
+    }
+
+    private fun verticalSpace(height: Int): Component = Box.createRigidArea(Dimension(0, height))
+
+    // ===================================================================
+    // 行为
+    // ===================================================================
 
     private fun applyExclusionPatterns() {
         val patterns =
@@ -322,34 +422,61 @@ class SweepSettingsConfigurable(
         settings.updateAutocompleteExclusionPatterns(patterns)
     }
 
+    private fun updateServerStatus(
+        healthy: Boolean,
+        url: String,
+    ) {
+        serverStatusLabel?.text = if (healthy) "服务器运行中：$url" else "服务器未运行：$url"
+        serverStatusLabel?.foreground =
+            if (healthy) JBColor(Color(0, 128, 0), Color(80, 200, 80)) else JBColor.RED
+    }
+
     private fun testAutocompleteServer() {
-        val serverUrl = LocalAutocompleteServerManager.getInstance().getServerUrl()
+        val manager = LocalAutocompleteServerManager.getInstance()
+        val serverUrl = manager.getServerUrl()
+
+        // 立即反馈，避免“点了没反应”
+        serverStatusLabel?.text = "正在测试 $serverUrl ..."
+        serverStatusLabel?.foreground = JBColor.GRAY
+
         ApplicationManager.getApplication().executeOnPooledThread {
-            val healthy = LocalAutocompleteServerManager.getInstance().isServerHealthy()
-            ApplicationManager.getApplication().invokeLater {
-                showNotification(
-                    title = "Next-Edit 服务器",
-                    content = if (healthy) "服务器运行正常：$serverUrl" else "无法连接服务器：$serverUrl",
-                    type = if (healthy) NotificationType.INFORMATION else NotificationType.WARNING,
-                    group = "Sweep Autocomplete",
-                )
-            }
+            val healthy = manager.isServerHealthy()
+            val message = if (healthy) "服务器运行正常：$serverUrl" else "无法连接服务器：$serverUrl"
+            // 指定模态状态：保证在模态的设置页打开期间立即刷新状态并弹出结果
+            ApplicationManager.getApplication().invokeLater(
+                {
+                    updateServerStatus(healthy, serverUrl)
+                    showTestResult(message, "Next-Edit 服务器（测试连接）", isError = !healthy)
+                },
+                ModalityState.stateForComponent(uiRoot),
+            )
         }
     }
 
     private fun testCommitMessageServer() {
-        val url = settings.commitMessageUrl.trim().trimEnd('/')
+        // 读取输入框中当前填写的地址（即使尚未失焦保存，也按输入框内容测试）
+        val url = (commitMessageUrlField?.text?.trim() ?: settings.commitMessageUrl).trim().trimEnd('/')
+
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = probeCommitMessageServer(url)
-            ApplicationManager.getApplication().invokeLater {
-                showNotification(
-                    title = "Commit Message LLM",
-                    content = result,
-                    type = if (result.startsWith("连接成功")) NotificationType.INFORMATION else NotificationType.WARNING,
-                    group = "Sweep Commit Message",
-                )
-            }
+            // 指定模态状态：保证在模态的设置页打开期间立即弹出结果
+            ApplicationManager.getApplication().invokeLater(
+                { showTestResult(result, "Commit Message LLM（测试连接）", isError = !result.startsWith("连接成功")) },
+                ModalityState.stateForComponent(uiRoot),
+            )
         }
+    }
+
+    /**
+     * 以当前设置页为父窗口弹出模态测试结果对话框（保证一定显示在设置页之上）。
+     */
+    private fun showTestResult(
+        message: String,
+        title: String,
+        isError: Boolean,
+    ) {
+        val icon = if (isError) Messages.getErrorIcon() else Messages.getInformationIcon()
+        Messages.showMessageDialog(uiRoot, message, title, icon)
     }
 
     /**
@@ -397,56 +524,6 @@ class SweepSettingsConfigurable(
         }
     }
 
-    private fun showNotification(
-        title: String,
-        content: String,
-        type: NotificationType,
-        group: String,
-    ) {
-        try {
-            val notificationGroup = NotificationGroupManager.getInstance().getNotificationGroup(group)
-            notificationGroup.createNotification(title, content, type).notify(project)
-        } catch (e: Exception) {
-            JOptionPane.showMessageDialog(null, content, title, JOptionPane.INFORMATION_MESSAGE)
-        }
-    }
-
-    private fun sectionTitle(text: String): JLabel {
-        val label = JLabel(text)
-        label.font = label.font.deriveFont(Font.BOLD, 14f)
-        label.alignmentX = Component.LEFT_ALIGNMENT
-        return label
-    }
-
-    private fun verticalSpace(height: Int): Component = Box.createRigidArea(Dimension(0, height))
-
-    private fun formRow(
-        labelText: String,
-        field: JComponent,
-        tooltip: String? = null,
-    ): JPanel {
-        val row = JPanel()
-        row.layout = BoxLayout(row, BoxLayout.Y_AXIS)
-        row.alignmentX = Component.LEFT_ALIGNMENT
-        val label = JLabel(labelText)
-        label.font = label.font.deriveFont(13f)
-        if (tooltip != null) {
-            label.toolTipText = tooltip
-            field.toolTipText = tooltip
-        }
-        row.add(label)
-        row.add(Box.createRigidArea(Dimension(0, 3)))
-        row.add(field)
-        row.add(Box.createRigidArea(Dimension(0, 6)))
-        return row
-    }
-
-    private fun hintLabel(text: String): JLabel =
-        JLabel("<html><font color='gray'>$text</font></html>").apply {
-            font = font.deriveFont(12f)
-            alignmentX = Component.LEFT_ALIGNMENT
-        }
-
     override fun isModified(): Boolean = false
 
     override fun apply() {
@@ -461,11 +538,10 @@ class SweepSettingsConfigurable(
         nextEditEnabledCheckBox?.isSelected = settings.nextEditPredictionFlagOn
         acceptWordOnRightArrowCheckBox?.isSelected = settings.acceptWordOnRightArrow
         showAutocompleteBadgeCheckBox?.isSelected = settings.showAutocompleteBadge
+        excludeGitignoreCheckBox?.isSelected = settings.excludeGitignorePatterns
         disableConflictingPluginsCheckBox?.isSelected = settings.disableConflictingPlugins
-        localModeCheckBox?.isSelected = settings.autocompleteLocalMode
         useCustomizedCommitMessagesCheckBox?.isSelected = settings.useCustomizedCommitMessages
         exclusionPatternsField?.text = settings.allAutocompleteExclusionPatterns().sorted().joinToString(", ")
         debounceSpinner?.value = settings.getEffectiveDebounceMs().toInt()
-        updateServerFieldsEnabledState()
     }
 }

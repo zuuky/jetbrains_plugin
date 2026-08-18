@@ -6,6 +6,7 @@ import re
 from functools import lru_cache
 from loguru import logger
 from scipy.sparse import csr_matrix
+
 from sweep_autocomplete.autocomplete.next_edit_autocomplete_utils import (
     extract_diff_parts,
     parse_hunk,
@@ -43,7 +44,7 @@ def simple_tokenizer_with_offsets(text) -> list[tuple[str, int, int]]:
 
 
 def extract_added_and_deleted_code_from_recent_changes(
-    recent_changes: str, file_tokens_set: set[str]
+        recent_changes: str, file_tokens_set: set[str]
 ) -> tuple[list[str], list[str]]:
     """
     Extracts the deleted code section from the recent_changes diff.
@@ -74,7 +75,7 @@ def extract_added_and_deleted_code_from_recent_changes(
 
 
 def extract_added_and_deleted_from_hunk(
-    hunk: str, extension: str
+        hunk: str, extension: str
 ) -> tuple[list[str], list[str]]:
     old_code, new_code = extract_diff_parts(
         "".join(line for line in hunk.splitlines(True) if not line.startswith("File: "))
@@ -112,7 +113,7 @@ def extract_added_and_deleted_from_hunk(
 
 
 def extract_deleted_lines_from_recent_changes(
-    recent_changes: str,
+        recent_changes: str,
 ) -> list[tuple[str, int]]:
     """
     Extracts the full deleted lines from the recent_changes diff with their line numbers.
@@ -148,7 +149,7 @@ def extract_deleted_lines_from_recent_changes(
 
 
 def find_deleted_line_match(
-    file_contents: str, deleted_lines: list[tuple[str, int]]
+        file_contents: str, deleted_lines: list[tuple[str, int]]
 ) -> tuple[str, int] | None:
     """
     Searches for deleted lines in the file contents and returns a code block around the match.
@@ -196,15 +197,15 @@ def find_deleted_line_match(
 
 
 def find_best_matching_block(
-    file_contents: str,
-    recent_changes: str,
-    cursor_position: int,
-    block_size: int = 6,
-    editor_diagnostics: list[EditorDiagnostic] = None,
+        file_contents: str,
+        recent_changes: str,
+        cursor_position: int,
+        block_size: int = 6,
+        editor_diagnostics: list[EditorDiagnostic] = None,
 ) -> tuple[str, int, bool, EditorDiagnostic | None]:
     # Extract deleted lines
     with Timer(
-        min_time=0.001, precision=3, name="extract_deleted_lines_from_recent_changes"
+            min_time=0.001, precision=3, name="extract_deleted_lines_from_recent_changes"
     ):
         # Extract deleted lines from recent_changes
         deleted_lines = extract_deleted_lines_from_recent_changes(recent_changes)
@@ -265,7 +266,7 @@ def find_best_matching_block(
             diagnostic
             for diagnostic in editor_diagnostics
             if diagnostic.severity == "ERROR"
-            and abs(current_cursor_line_number - diagnostic.line_number) > 10
+               and abs(current_cursor_line_number - diagnostic.line_number) > 10
         ]
         if filtered_error_diagnostics:
             closest_error = min(
@@ -315,7 +316,7 @@ def find_best_matching_block(
         suffix = file_contents[cursor_position:]
         suffix_start = suffix.find("\n")
         if suffix_start != -1:
-            suffix = suffix[suffix_start + 1 :]
+            suffix = suffix[suffix_start + 1:]
         lines = suffix.splitlines(keepends=True)
         cursor_position += suffix_start + 1 + len("".join(lines[:block_size]))
         lines = lines[block_size:]

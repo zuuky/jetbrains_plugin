@@ -1,0 +1,32 @@
+[project]
+name = "sweep-autocomplete"
+version = "0.2.0"
+description = "Sweep next-edit autocomplete server (llama-cpp-python)"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",
+    "loguru>=0.7.0",
+    "requests>=2.31.0",
+    "regex>=2023.0.0",
+    "pydantic>=2.0.0",
+    "numpy>=1.24.0",
+    "scipy>=1.11.0",
+    "brotli>=1.1.0",
+]
+
+# llama-cpp-python is platform/GPU specific and installed by the start scripts
+# (or manually). `pip install -e .[llama]' installs the default CPU wheel.
+[project.optional-dependencies]
+llama = ["llama-cpp-python>=0.2.90"]
+
+# Entry point used by `uvx sweep-autocomplete` from the JetBrains plugin
+[project.scripts]
+sweep-autocomplete = "sweep_autocomplete.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sweep_autocomplete"]

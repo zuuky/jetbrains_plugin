@@ -1,11 +1,14 @@
 import json
 import time
 import traceback
-from fastapi import Body
-from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from fastapi import Body, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from loguru import logger
+
+from sweep_autocomplete import config
+from sweep_autocomplete.autocomplete.llm_local import preload_model
 from sweep_autocomplete.autocomplete.next_edit_autocomplete import (
     AutocompleteMetadata,
     fetch_next_edits,
@@ -17,7 +20,18 @@ from sweep_autocomplete.dataclasses.file_chunk_data import (
 )
 from sweep_autocomplete.utils.compression_middleware import RequestCompressionMiddleware
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    # Warm the model in the background so the first suggestion isn't slow.
+    # /health still responds immediately while the model loads.
+    if config.NEXT_EDIT_AUTOCOMPLETE_ENDPOINT is None:
+        logger.info("Local model mode: warming up llama.cpp in the background")
+        preload_model()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,18 +50,18 @@ def health():
 
 @app.post("/backend/next_edit_autocomplete", include_in_schema=False)
 def next_edit_autocomplete(
-    file_path: str = Body(...),
-    file_contents: str = Body(...),
-    original_file_contents: str = Body(None),
-    recent_changes: str = Body(...),
-    cursor_position: int = Body(...),
-    file_chunks: list[FileChunkData] = Body([]),
-    retrieval_chunks: list[FileChunkData] = Body([]),
-    recent_user_actions: list[UserAction] = Body([]),
-    multiple_suggestions: bool = Body(False),
-    recent_changes_high_res: str = Body(default=""),
-    changes_above_cursor: bool = Body(default=True),
-    editor_diagnostics: list[EditorDiagnostic] = Body(default=[]),
+        file_path: str = Body(...),
+        file_contents: str = Body(...),
+        original_file_contents: str = Body(None),
+        recent_changes: str = Body(...),
+        cursor_position: int = Body(...),
+        file_chunks: list[FileChunkData] = Body([]),
+        retrieval_chunks: list[FileChunkData] = Body([]),
+        recent_user_actions: list[UserAction] = Body([]),
+        multiple_suggestions: bool = Body(False),
+        recent_changes_high_res: str = Body(default=""),
+        changes_above_cursor: bool = Body(default=True),
+        editor_diagnostics: list[EditorDiagnostic] = Body(default=[]),
 ):
     function_start_time = time.time()
 
@@ -56,18 +70,18 @@ def next_edit_autocomplete(
 
         try:
             for result, completions, formatted_prompt, metadata in fetch_next_edits(
-                file_path=file_path,
-                file_contents=file_contents,
-                recent_changes=recent_changes,
-                cursor_position=cursor_position,
-                original_file_contents=original_file_contents,
-                file_chunks=file_chunks,
-                retrieval_chunks=retrieval_chunks,
-                recent_user_actions=recent_user_actions,
-                recent_changes_high_res=recent_changes_high_res,
-                changes_above_cursor=changes_above_cursor,
-                is_new_user=False,
-                editor_diagnostics=editor_diagnostics,
+                    file_path=file_path,
+                    file_contents=file_contents,
+                    recent_changes=recent_changes,
+                    cursor_position=cursor_position,
+                    original_file_contents=original_file_contents,
+                    file_chunks=file_chunks,
+                    retrieval_chunks=retrieval_chunks,
+                    recent_user_actions=recent_user_actions,
+                    recent_changes_high_res=recent_changes_high_res,
+                    changes_above_cursor=changes_above_cursor,
+                    is_new_user=False,
+                    editor_diagnostics=editor_diagnostics,
             ):
                 data = {
                     **result.__dict__,

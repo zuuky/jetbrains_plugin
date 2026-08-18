@@ -16,7 +16,7 @@ class PromptTooLongError(Exception):
 
 
 def adjust_cursor_position_from_utf16(
-    file_contents: str, utf16_cursor_position: int
+        file_contents: str, utf16_cursor_position: int
 ) -> int:
     """
     Convert cursor position from UTF-16 (used by IntelliJ/JVM) to UTF-8 byte position.
@@ -295,8 +295,8 @@ def extract_minimal_diff(original_code: str, new_code: str) -> tuple[str, int, i
 
     start_diff = 0
     while (
-        start_diff < min(len(original_lines), len(new_lines))
-        and original_lines[start_diff] == new_lines[start_diff]
+            start_diff < min(len(original_lines), len(new_lines))
+            and original_lines[start_diff] == new_lines[start_diff]
     ):
         start_diff += 1
 
@@ -304,11 +304,11 @@ def extract_minimal_diff(original_code: str, new_code: str) -> tuple[str, int, i
     end_diff_orig = len(original_lines) - 1
     end_diff_new = len(new_lines) - 1
     while (
-        end_diff_orig >= 0
-        and end_diff_new >= 0
-        and end_diff_orig >= start_diff
-        and end_diff_new >= start_diff
-        and original_lines[end_diff_orig] == new_lines[end_diff_new]
+            end_diff_orig >= 0
+            and end_diff_new >= 0
+            and end_diff_orig >= start_diff
+            and end_diff_new >= start_diff
+            and original_lines[end_diff_orig] == new_lines[end_diff_new]
     ):
         end_diff_orig -= 1
         end_diff_new -= 1
@@ -320,7 +320,7 @@ def extract_minimal_diff(original_code: str, new_code: str) -> tuple[str, int, i
     start_offset = sum(len(line) for line in original_lines[:start_context])
     end_offset = sum(len(line) for line in original_lines[: end_context_orig + 1])
 
-    minimal_new = "".join(new_lines[start_context : end_context_new + 1])
+    minimal_new = "".join(new_lines[start_context: end_context_new + 1])
     if minimal_new.startswith("\n"):  # hacky but works
         minimal_new = minimal_new[1:]
         start_offset += 1
@@ -416,7 +416,7 @@ def split_into_diff_hunks(input_content: str, output_content: str):
 
 
 def is_large_diff_above_cursor(
-    original: str, completion: str, relative_cursor_position: int
+        original: str, completion: str, relative_cursor_position: int
 ) -> bool:
     """
     Check if the completion has a large diff above the cursor position.
@@ -525,7 +525,7 @@ def detect_and_revert_end_deletion(original: str, completion: str) -> tuple[str,
         suffix_pos = original.find(suffix)
 
         # Only consider if there's substantial content after the suffix in original
-        potential_deletion = original[suffix_pos + suffix_len :]
+        potential_deletion = original[suffix_pos + suffix_len:]
         if len(potential_deletion) < 50:  # Not a substantial deletion
             continue
 
@@ -560,7 +560,7 @@ def truncate_long_lines(content: str) -> str:
 
             # Truncate and add ellipsis
             truncated = (
-                line_without_newline[:AUTOCOMPLETE_TRUNCATION_LINE_LENGTH] + "..."
+                    line_without_newline[:AUTOCOMPLETE_TRUNCATION_LINE_LENGTH] + "..."
             )
 
             # Restore newline if it was there

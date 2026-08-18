@@ -11,6 +11,8 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from loguru import logger
 from pydantic import BaseModel
+from typing import Any, Literal, Optional
+
 from sweep_autocomplete.autocomplete.llm_local import generate_completion, RequestCancelled
 from sweep_autocomplete.autocomplete.next_edit_autocomplete_retrieval import (
     find_best_matching_block,
@@ -35,7 +37,13 @@ from sweep_autocomplete.autocomplete.next_edit_autocomplete_utils import (
     strip_leading_empty_newlines,
     truncate_long_lines,
 )
-from sweep_autocomplete.config import NEXT_EDIT_AUTOCOMPLETE_ENDPOINT
+from sweep_autocomplete.config import (
+    ENABLE_RETRIEVAL_FALLBACK,
+    LOG_MODEL_PROMPT,
+    LOG_MODEL_RAW_OUTPUT,
+    MODEL_LOG_MAX_CHARS,
+    NEXT_EDIT_AUTOCOMPLETE_ENDPOINT,
+)
 from sweep_autocomplete.dataclasses.file_chunk_data import (
     EditorDiagnostic,
     FileChunkData,
@@ -43,16 +51,17 @@ from sweep_autocomplete.dataclasses.file_chunk_data import (
 )
 from sweep_autocomplete.utils.str_utils import pack_items_for_prompt
 from sweep_autocomplete.utils.timer import Timer
-from typing import Any, Literal, Optional
 
 NUM_LINES_BEFORE = 2
 NUM_LINES_AFTER = 5
 
 CHARS_PER_TOKEN = 3.5
 
+
 def estimate_token_count(text: str) -> int:
     """Estimate token count using character-based approximation."""
     return int(len(text) / CHARS_PER_TOKEN)
+
 
 MAX_INPUT_TOKENS_COUNT = (8192 * 4) - 256  # ~8k tokens at 3.5 chars/token, fits in 32k ctx
 CHARACTER_BOUND_TO_CHECK_TOKENIZATION = (8192 * 2) - 256  # ~4k tokens
@@ -99,11 +108,11 @@ class PromptTruncationRecord(BaseModel):
 
 
 def find_ast_based_prefill_start(
-    code_block: str,
-    cursor_position: int,
-    file_path: str,
-    file_contents: str,
-    block_start_index: int,
+        code_block: str,
+        cursor_position: int,
+        file_path: str,
+        file_contents: str,
+        block_start_index: int,
 ) -> int | None:
     """
     Find the start of the AST node containing the cursor position and crawl up parent nodes
@@ -154,10 +163,10 @@ def remove_last_line_from_string(s: str) -> str:
 
 
 def check_early_return_condition(
-    accumulated_response: str,
-    prefill: str,
-    cleaned_lines: list[str],
-    cursor_pos: int,
+        accumulated_response: str,
+        prefill: str,
+        cleaned_lines: list[str],
+        cursor_pos: int,
 ) -> str | None:
     """
     Check if early return condition is met based on accumulated response.
@@ -182,10 +191,10 @@ def check_early_return_condition(
         first_accumulated_response_line = accumulated_response.splitlines(True)[0]
         remainder = cleaned_content[adjusted_cursor_pos:]
         if (
-            first_accumulated_response_line.startswith(prefix)
-            and first_accumulated_response_line.endswith(suffix)
-            and len(first_accumulated_response_line) > len(first_line)
-            and not remainder.strip().startswith(first_line.strip())
+                first_accumulated_response_line.startswith(prefix)
+                and first_accumulated_response_line.endswith(suffix)
+                and len(first_accumulated_response_line) > len(first_line)
+                and not remainder.strip().startswith(first_line.strip())
         ):
             return first_accumulated_response_line + "".join(rest)
     return None
@@ -249,7 +258,7 @@ class AutocompleteMetadata:
 
 
 def get_block_around_cursor_line(
-    lines: list[str], cursor_line: int, num_lines_before: int, num_lines_after: int
+        lines: list[str], cursor_line: int, num_lines_before: int, num_lines_after: int
 ):
     block_start = max(0, cursor_line - num_lines_before)
     block_end = min(
@@ -279,7 +288,7 @@ def get_block_around_cursor_line(
 
 
 def truncate_code_block_by_tokens(
-    code_block: str, max_token_limit: int = int(AUTOCOMPLETE_OUTPUT_MAX_TOKENS / 2)
+        code_block: str, max_token_limit: int = int(AUTOCOMPLETE_OUTPUT_MAX_TOKENS / 2)
 ) -> str:
     """
     Truncate a code block to fit within the specified token limit.
@@ -310,7 +319,7 @@ def truncate_code_block_by_tokens(
 
 
 def get_block_at_cursor(
-    file_contents: str, cursor_position: int
+        file_contents: str, cursor_position: int
 ) -> tuple[str, str, str, int]:
     """
     Extract the code block surrounding the cursor position.
@@ -336,7 +345,7 @@ def get_block_at_cursor(
 
 
 def is_pure_insertion_above_cursor(
-    cleaned_code_block: str, completion: str, relative_cursor_position: int
+        cleaned_code_block: str, completion: str, relative_cursor_position: int
 ) -> bool:
     current_line_index = len(
         cleaned_code_block[:relative_cursor_position].splitlines(True)
@@ -362,7 +371,7 @@ def is_pure_insertion_above_cursor(
 
 
 def format_recent_changes_and_prev_section(
-    recent_changes: str, current_section: str
+        recent_changes: str, current_section: str
 ) -> tuple[str, str, list[str]]:
     hunks = split_into_hunks(recent_changes)
     prev_section = current_section.replace("<|cursor|>", "")
@@ -405,20 +414,20 @@ def format_recent_changes_and_prev_section(
         end_line = start_line + len(lines) - 1
         if old_code.strip() or new_code.strip():
             result += (
-                diff_format.format(
-                    old_code=old_code.strip("\n"),
-                    new_code=new_code.strip("\n"),
-                    file_path=file_path,
-                    start_line=start_line,
-                    end_line=end_line,
-                )
-                + "\n"
+                    diff_format.format(
+                        old_code=old_code.strip("\n"),
+                        new_code=new_code.strip("\n"),
+                        file_path=file_path,
+                        start_line=start_line,
+                        end_line=end_line,
+                    )
+                    + "\n"
             )
     return result.rstrip("\n"), prev_section, prev_sections
 
 
 def get_latest_user_action_non_cursor_movement(
-    recent_user_actions: list[UserAction],
+        recent_user_actions: list[UserAction],
 ) -> UserAction | None:
     for action in recent_user_actions[::-1]:
         if action.action_type != "CURSOR_MOVEMENT":
@@ -427,10 +436,10 @@ def get_latest_user_action_non_cursor_movement(
 
 
 def get_last_user_action_index_above_cursor(
-    recent_user_actions: list[UserAction],
-    cursor_position: int,
-    file_path: str,
-    block_start_index: int,
+        recent_user_actions: list[UserAction],
+        cursor_position: int,
+        file_path: str,
+        block_start_index: int,
 ) -> int:
     """
     Get the last index of a recent_user_action that occurred above the cursor_position in the current file.
@@ -448,15 +457,15 @@ def get_last_user_action_index_above_cursor(
 
     # Find actions in the current file that are above the cursor position
     for i in range(
-        len(recent_user_actions) - 1,
-        max(-1, len(recent_user_actions) - 1 - NUM_RECENT_ACTIONS_TO_PRESERVE),
-        -1,
+            len(recent_user_actions) - 1,
+            max(-1, len(recent_user_actions) - 1 - NUM_RECENT_ACTIONS_TO_PRESERVE),
+            -1,
     ):
         action = recent_user_actions[i]
         if (
-            action.file_path == file_path
-            and action.action_type != "CURSOR_MOVEMENT"
-            and action.offset < cursor_position
+                action.file_path == file_path
+                and action.action_type != "CURSOR_MOVEMENT"
+                and action.offset < cursor_position
         ):
             return action.offset - block_start_index
 
@@ -464,23 +473,23 @@ def get_last_user_action_index_above_cursor(
 
 
 def get_ghost_text_with_location(
-    completion: str, cleaned_code_block: str, relative_cursor_position: int
+        completion: str, cleaned_code_block: str, relative_cursor_position: int
 ) -> str:
     prefix = cleaned_code_block[:relative_cursor_position]
     suffix = cleaned_code_block[relative_cursor_position:]
     if completion.startswith(prefix) and completion.endswith(suffix):
         # Handle empty suffix case: -0 would slice to beginning, so use conditional
         if suffix:
-            ghost_text = completion[len(prefix) : -len(suffix)]
+            ghost_text = completion[len(prefix): -len(suffix)]
         else:
-            ghost_text = completion[len(prefix) :]
+            ghost_text = completion[len(prefix):]
         if ghost_text:
             return ghost_text
     return ""
 
 
 def find_ghost_text_non_local(
-    completion: str, cleaned_code_block: str, relative_cursor_position: int
+        completion: str, cleaned_code_block: str, relative_cursor_position: int
 ) -> tuple[str, int]:
     if len(cleaned_code_block) > len(completion):
         return "", -1
@@ -503,7 +512,7 @@ def find_ghost_text_non_local(
 
 
 def is_single_line_ghost_text(
-    completion: str, cleaned_code_block: str, relative_cursor_position: int
+        completion: str, cleaned_code_block: str, relative_cursor_position: int
 ):
     if len(cleaned_code_block) < relative_cursor_position:
         return ""
@@ -511,14 +520,14 @@ def is_single_line_ghost_text(
     prefix = cleaned_code_block[:relative_cursor_position]
     suffix = cleaned_code_block[relative_cursor_position:]
     if completion.startswith(prefix) and completion.endswith(suffix):
-        ghost_text = completion[len(prefix) : -len(suffix)]
+        ghost_text = completion[len(prefix): -len(suffix)]
         if ghost_text and "\n" not in ghost_text:
             return ghost_text
     return ""
 
 
 def apply_completions_to_code_block(
-    completions: list[AutocompleteResult], file_contents: str, cleaned_code_block: str
+        completions: list[AutocompleteResult], file_contents: str, cleaned_code_block: str
 ) -> str:
     """
     Apply all completions to the cleaned_code_block and return the modified code section.
@@ -553,27 +562,27 @@ def apply_completions_to_code_block(
 
         # Check if the completion affects the code block area
         if (
-            relative_start >= 0
-            and relative_start <= len(cleaned_code_block)
-            and relative_end <= len(cleaned_code_block)
+                relative_start >= 0
+                and relative_start <= len(cleaned_code_block)
+                and relative_end <= len(cleaned_code_block)
         ):
             # Apply the completion to cleaned_code_block
             modified_code_block = (
-                modified_code_block[:relative_start]
-                + completion.completion
-                + modified_code_block[relative_end:]
+                    modified_code_block[:relative_start]
+                    + completion.completion
+                    + modified_code_block[relative_end:]
             )
 
     return modified_code_block
 
 
 def select_best_hunk_from_completion(
-    completion: str,
-    cleaned_code_block: str,
-    file_contents: str,
-    cursor_position: int,
-    autocomplete_id: str,
-    logprobs: list = None,
+        completion: str,
+        cleaned_code_block: str,
+        file_contents: str,
+        cursor_position: int,
+        autocomplete_id: str,
+        logprobs: list = None,
 ) -> list[AutocompleteResult]:
     """
     Find the best hunk from the completion to suggest as an edit based on cursor position.
@@ -604,12 +613,12 @@ def select_best_hunk_from_completion(
     )
     if ghost_text:
         is_insert_next_line = (
-            ghost_text_position == relative_cursor_position + 1
-            and cleaned_code_block[ghost_text_position - 1] == "\n"
+                ghost_text_position == relative_cursor_position + 1
+                and cleaned_code_block[ghost_text_position - 1] == "\n"
         )
         insertion_starts_with_newline = (
-            ghost_text.startswith("\n")
-            and ghost_text_position == relative_cursor_position
+                ghost_text.startswith("\n")
+                and ghost_text_position == relative_cursor_position
         )
         if is_insert_next_line or insertion_starts_with_newline:
             return [
@@ -634,8 +643,8 @@ def select_best_hunk_from_completion(
         if remaining_ghost_text:
             remaining_ghost_text = remaining_ghost_text.rstrip()
             if (
-                ghost_text_position < len(cleaned_code_block)
-                and cleaned_code_block[ghost_text_position] == "\n"
+                    ghost_text_position < len(cleaned_code_block)
+                    and cleaned_code_block[ghost_text_position] == "\n"
             ):
                 return [
                     AutocompleteResult(
@@ -692,8 +701,8 @@ def select_best_hunk_from_completion(
 
         # Hack for end of file
         if (
-            start_offset == len(file_contents)
-            and file_contents[start_offset - 1] != "\n"
+                start_offset == len(file_contents)
+                and file_contents[start_offset - 1] != "\n"
         ):
             new_text = "\n" + new_text
 
@@ -715,8 +724,8 @@ def select_best_hunk_from_completion(
         results = []
 
         should_split = (
-            start_line_position == start_offset <= cursor_position < end_offset
-            and new_text.count("\n") > 0
+                start_line_position == start_offset <= cursor_position < end_offset
+                and new_text.count("\n") > 0
         )
 
         if should_split:
@@ -729,7 +738,7 @@ def select_best_hunk_from_completion(
             first_newline_pos = original_text_section.find("\n")
             if first_newline_pos != -1:
                 first_line_end = (
-                    cursor_position + first_newline_pos + 1
+                        cursor_position + first_newline_pos + 1
                 )  # +1 to include the newline
             else:
                 first_line_end = end_offset  # No newline found, use end_offset
@@ -756,7 +765,7 @@ def select_best_hunk_from_completion(
                     )
                 )
                 if (
-                    remaining_new_text
+                        remaining_new_text
                 ):  # Only add second result if there's remaining text
                     results.append(
                         AutocompleteResult(
@@ -876,19 +885,19 @@ def select_best_hunk_from_completion(
 
 
 def fetch_next_edits_http(
-    formatted_prompt: str,
-    stop: list,
-    cleaned_code_block: str,
-    file_contents: str,
-    cursor_position: int,
-    prefix: str = "",
-    prefill: str = "",
-    force_ghost_text: bool = False,
-    relative_cursor_line: int = 0,
+        formatted_prompt: str,
+        stop: list,
+        cleaned_code_block: str,
+        file_contents: str,
+        cursor_position: int,
+        prefix: str = "",
+        prefill: str = "",
+        force_ghost_text: bool = False,
+        relative_cursor_line: int = 0,
 ) -> (
-    tuple[str, int, list[Any], str]
-    | tuple[str | Any, int, list[Any] | Any, Any | None]
-    | tuple[str, int, list[Any] | Any, Any | None]
+        tuple[str, int, list[Any], str]
+        | tuple[str | Any, int, list[Any] | Any, Any | None]
+        | tuple[str, int, list[Any] | Any, Any | None]
 ):
     """Use HTTP streaming to fetch next edits from NEXT_EDIT_AUTOCOMPLETE_ENDPOINT."""
     session = get_session()
@@ -942,8 +951,14 @@ def fetch_next_edits_http(
             finish_reason = None
             logprobs = []
 
-        logger.info(f"Finish reason: {finish_reason}")
-        logger.info(f"Accumulated response length: {len(accumulated_response)}, content: {accumulated_response[:200] if accumulated_response else 'EMPTY'}")
+        if LOG_MODEL_RAW_OUTPUT:
+            log_text = (
+                obj if not MODEL_LOG_MAX_CHARS else str(obj)[:MODEL_LOG_MAX_CHARS]
+            )
+            logger.info(f"SGLang response: {log_text}")
+        logger.debug(
+            f"Finish reason: {finish_reason}, response length: {len(accumulated_response)}"
+        )
 
         return (
             accumulated_response,
@@ -978,7 +993,7 @@ def get_session():
 
 
 def is_typing_quickly(
-    recent_user_actions: list[UserAction], threshold_ms: int = 200, min_actions: int = 3
+        recent_user_actions: list[UserAction], threshold_ms: int = 200, min_actions: int = 3
 ) -> bool:
     """
     Detect if the user is typing quickly by analyzing consecutive INSERT_CHAR actions.
@@ -1011,8 +1026,8 @@ def is_typing_quickly(
     time_diffs = []
     for i in range(1, len(consecutive_insert_actions)):
         time_diff = (
-            consecutive_insert_actions[i].timestamp
-            - consecutive_insert_actions[i - 1].timestamp
+                consecutive_insert_actions[i].timestamp
+                - consecutive_insert_actions[i - 1].timestamp
         )
         time_diffs.append(time_diff)
 
@@ -1025,23 +1040,23 @@ def is_typing_quickly(
 
 
 def _fetch_next_edits_core(
-    file_path: str,
-    file_contents: str,
-    recent_changes: str,
-    cursor_position: int,
-    original_file_contents: str | None,
-    code_block: str,
-    prefix: str,
-    suffix: str,
-    autocomplete_id: str,
-    block_start_index: int,
-    is_retrieval: bool,
-    file_chunks: list[FileChunkData] = None,
-    retrieval_chunks: list[FileChunkData] = None,
-    recent_user_actions: list[UserAction] = None,
-    recent_changes_high_res: str = "",
-    changes_above_cursor: bool = False,
-    do_insert_cursor: bool = True,
+        file_path: str,
+        file_contents: str,
+        recent_changes: str,
+        cursor_position: int,
+        original_file_contents: str | None,
+        code_block: str,
+        prefix: str,
+        suffix: str,
+        autocomplete_id: str,
+        block_start_index: int,
+        is_retrieval: bool,
+        file_chunks: list[FileChunkData] = None,
+        retrieval_chunks: list[FileChunkData] = None,
+        recent_user_actions: list[UserAction] = None,
+        recent_changes_high_res: str = "",
+        changes_above_cursor: bool = False,
+        do_insert_cursor: bool = True,
 ):
     # Initialize mutable default arguments
     if file_chunks is None:
@@ -1080,9 +1095,9 @@ def _fetch_next_edits_core(
     )
     if do_insert_cursor:
         code_block = (
-            code_block[:relative_cursor_position]
-            + "<|cursor|>"
-            + code_block[relative_cursor_position:]
+                code_block[:relative_cursor_position]
+                + "<|cursor|>"
+                + code_block[relative_cursor_position:]
         )
     only_changed_lines, prev_section, prev_sections = (
         format_recent_changes_and_prev_section(recent_changes, code_block)
@@ -1160,17 +1175,17 @@ def _fetch_next_edits_core(
     initial_file = get_lines_around_cursor(original_file_contents, cursor_position)
 
     formatted_prompt = (
-        prompt.format(
-            file_path=file_path,
-            recent_changes=only_changed_lines,
-            prev_section=prev_section,
-            code_block=code_block,
-            retrieval_results=retrieval_results,
-            initial_file=initial_file,
-            start_line=relative_cursor_line + 1,
-            end_line=relative_cursor_line + len(code_block.splitlines()) + 1,
-        )
-        + f"\n{prefill}"
+            prompt.format(
+                file_path=file_path,
+                recent_changes=only_changed_lines,
+                prev_section=prev_section,
+                code_block=code_block,
+                retrieval_results=retrieval_results,
+                initial_file=initial_file,
+                start_line=relative_cursor_line + 1,
+                end_line=relative_cursor_line + len(code_block.splitlines()) + 1,
+            )
+            + f"\n{prefill}"
     )
 
     truncation_record = PromptTruncationRecord(
@@ -1206,8 +1221,8 @@ def _fetch_next_edits_core(
     file_chunks_line_count = -1
 
     if (
-        len(formatted_prompt) + len(formatted_file_chunks)
-        > CHARACTER_BOUND_TO_CHECK_TOKENIZATION
+            len(formatted_prompt) + len(formatted_file_chunks)
+            > CHARACTER_BOUND_TO_CHECK_TOKENIZATION
     ):
         with Timer("Prompt Truncation", precision=4, min_time=0.0):
             (
@@ -1270,6 +1285,14 @@ def _fetch_next_edits_core(
     # truncate long lines in formatted_prompt ~0.0001 seconds
     formatted_prompt = truncate_long_lines(formatted_prompt)
 
+    if LOG_MODEL_PROMPT:
+        log_text = (
+            formatted_prompt
+            if not MODEL_LOG_MAX_CHARS
+            else formatted_prompt[:MODEL_LOG_MAX_CHARS]
+        )
+        logger.info(f"Model prompt ({len(formatted_prompt)} chars):\n{log_text}")
+
     with Timer("Autocomplete", precision=4):
         if NEXT_EDIT_AUTOCOMPLETE_ENDPOINT:
             # Use remote HTTP endpoint
@@ -1329,6 +1352,14 @@ def _fetch_next_edits_core(
                 except Exception as e:
                     logger.error(f"Local model error: {e}")
                     raise
+        if LOG_MODEL_RAW_OUTPUT:
+            log_text = (
+                completion
+                if not MODEL_LOG_MAX_CHARS
+                else completion[:MODEL_LOG_MAX_CHARS]
+            )
+            logger.info(f"Raw model output ({len(completion)} chars):\n{log_text}")
+
         if not completion:
             metadata = replace(base_metadata, exit_reason="no_completion_received")
             return (
@@ -1368,7 +1399,7 @@ def _fetch_next_edits_core(
         )
 
     if completion.startswith("<|") or completion.removeprefix(forced_prefix).startswith(
-        "<|"
+            "<|"
     ):
         # Bandaid fix -- root cause is it's probably a special token.
         logger.warning(
@@ -1401,7 +1432,7 @@ def _fetch_next_edits_core(
     completion = prefill + completion
 
     if is_pure_insertion_above_cursor(
-        cleaned_code_block, completion, relative_cursor_position
+            cleaned_code_block, completion, relative_cursor_position
     ):
         # Pure insertion above cursor detected, return empty completion
         logger.warning(f"Pure insertion above cursor detected.")
@@ -1415,7 +1446,7 @@ def _fetch_next_edits_core(
         )
 
     if is_large_diff_above_cursor(
-        cleaned_code_block, completion, relative_cursor_position
+            cleaned_code_block, completion, relative_cursor_position
     ):
         # Large diff above cursor detected (>5 lines added with >1 line deleted), return empty completion
         logger.warning(f"Large diff above cursor detected.")
@@ -1434,8 +1465,8 @@ def _fetch_next_edits_core(
 
     completion = (
         # strip_leading_empty_newlines(data.get("response", "")).removesuffix("<|file_sep|>") or cleaned_code_block
-        strip_leading_empty_newlines(completion).removesuffix("<|file_sep|>")
-        or cleaned_code_block
+            strip_leading_empty_newlines(completion).removesuffix("<|file_sep|>")
+            or cleaned_code_block
     )
     if "<|cursor|>" not in cleaned_code_block:
         completion = completion.replace("<|cursor|>", "")
@@ -1450,7 +1481,6 @@ def _fetch_next_edits_core(
     # if completion.startswith(cleaned_code_block) and completion.removeprefix(cleaned_code_block) in file_contents:
     #     logger.warning("Completion starts with cleaned code block and is in file contents.")
     #     completion = cleaned_code_block
-
 
     # # multi-line deletions are probably bugs so let's disable it.
     # if len(cleaned_code_block.splitlines()) - len(completion.splitlines()) > 2:
@@ -1526,12 +1556,12 @@ def _fetch_next_edits_core(
         # Case 1: Current line is non-empty blank line and suggestion deletes pure whitespace at cursor position
         first_completion = completions[0]
         is_pure_whitespace_deleted = (
-            first_completion.completion == ""
-            and file_contents[
-                first_completion.start_index : first_completion.end_index
-            ].strip()
-            == ""
-            and first_completion.end_index in (cursor_position, cursor_position + 1)
+                first_completion.completion == ""
+                and file_contents[
+                    first_completion.start_index: first_completion.end_index
+                ].strip()
+                == ""
+                and first_completion.end_index in (cursor_position, cursor_position + 1)
         )
         if is_pure_whitespace_deleted:
             logger.warning(
@@ -1573,7 +1603,7 @@ def _fetch_next_edits_core(
 
 
 def truncate_prompt_when_near_limit(
-    truncation_record: PromptTruncationRecord,
+        truncation_record: PromptTruncationRecord,
 ) -> tuple[str | None, int, int, int]:
     """
     Truncate prompt when near token limit.
@@ -1582,17 +1612,17 @@ def truncate_prompt_when_near_limit(
         Tuple of (final_prompt, file_chunks_used, file_chunks_char_count, file_chunks_line_count)
     """
     formatted_prompt_minimal = (
-        prompt.format(
-            file_path=truncation_record.file_path,
-            recent_changes=truncation_record.recent_changes,
-            prev_section=truncation_record.prev_section,
-            code_block=truncation_record.code_block,
-            retrieval_results="",
-            initial_file=truncation_record.initial_file,
-            start_line=truncation_record.start_line,
-            end_line=truncation_record.end_line,
-        )
-        + f"\n{truncation_record.prefill}"
+            prompt.format(
+                file_path=truncation_record.file_path,
+                recent_changes=truncation_record.recent_changes,
+                prev_section=truncation_record.prev_section,
+                code_block=truncation_record.code_block,
+                retrieval_results="",
+                initial_file=truncation_record.initial_file,
+                start_line=truncation_record.start_line,
+                end_line=truncation_record.end_line,
+            )
+            + f"\n{truncation_record.prefill}"
     )
 
     # Case zero: this is too long, we should not even tokenize as it takes 200 ms in worst case
@@ -1610,26 +1640,26 @@ def truncate_prompt_when_near_limit(
 
     # Case 1: everything fits; return the full prompt
     if (
-        formatted_prompt_minimal_token_count
-        + retrieval_results_token_count
-        + sum(chunks_token_count)
-        <= MAX_INPUT_TOKENS_COUNT
+            formatted_prompt_minimal_token_count
+            + retrieval_results_token_count
+            + sum(chunks_token_count)
+            <= MAX_INPUT_TOKENS_COUNT
     ):
         formatted_file_chunks = "".join(
             [chunk.to_string() for chunk in truncation_record.file_chunks]
         )
         final_prompt = formatted_file_chunks + (
-            prompt.format(
-                file_path=truncation_record.file_path,
-                recent_changes=truncation_record.recent_changes,
-                prev_section=truncation_record.prev_section,
-                code_block=truncation_record.code_block,
-                retrieval_results=truncation_record.retrieval_results,
-                initial_file=truncation_record.initial_file,
-                start_line=truncation_record.start_line,
-                end_line=truncation_record.end_line,
-            )
-            + f"\n{truncation_record.prefill}"
+                prompt.format(
+                    file_path=truncation_record.file_path,
+                    recent_changes=truncation_record.recent_changes,
+                    prev_section=truncation_record.prev_section,
+                    code_block=truncation_record.code_block,
+                    retrieval_results=truncation_record.retrieval_results,
+                    initial_file=truncation_record.initial_file,
+                    start_line=truncation_record.start_line,
+                    end_line=truncation_record.end_line,
+                )
+                + f"\n{truncation_record.prefill}"
         )
         file_chunks_count = len(truncation_record.file_chunks)
         file_chunks_char_count = sum(
@@ -1646,21 +1676,21 @@ def truncate_prompt_when_near_limit(
         file_chunks_line_count = 0
     # Case 3: drop all file chunks
     elif (
-        formatted_prompt_minimal_token_count + retrieval_results_token_count
-        > MAX_INPUT_TOKENS_COUNT
+            formatted_prompt_minimal_token_count + retrieval_results_token_count
+            > MAX_INPUT_TOKENS_COUNT
     ):
         final_prompt = (
-            prompt.format(
-                file_path=truncation_record.file_path,
-                recent_changes=truncation_record.recent_changes,
-                prev_section=truncation_record.prev_section,
-                code_block=truncation_record.code_block,
-                retrieval_results="",
-                initial_file=truncation_record.initial_file,
-                start_line=truncation_record.start_line,
-                end_line=truncation_record.end_line,
-            )
-            + f"\n{truncation_record.prefill}"
+                prompt.format(
+                    file_path=truncation_record.file_path,
+                    recent_changes=truncation_record.recent_changes,
+                    prev_section=truncation_record.prev_section,
+                    code_block=truncation_record.code_block,
+                    retrieval_results="",
+                    initial_file=truncation_record.initial_file,
+                    start_line=truncation_record.start_line,
+                    end_line=truncation_record.end_line,
+                )
+                + f"\n{truncation_record.prefill}"
         )
         file_chunks_count = 0
         file_chunks_char_count = 0
@@ -1668,27 +1698,27 @@ def truncate_prompt_when_near_limit(
     # Case 4: drop some file chunks
     else:
         formatted_prompt_with_retrieval_chunks = (
-            prompt.format(
-                file_path=truncation_record.file_path,
-                recent_changes=truncation_record.recent_changes,
-                prev_section=truncation_record.prev_section,
-                code_block=truncation_record.code_block,
-                retrieval_results=truncation_record.retrieval_results,
-                initial_file=truncation_record.initial_file,
-                start_line=truncation_record.start_line,
-                end_line=truncation_record.end_line,
-            )
-            + f"\n{truncation_record.prefill}"
+                prompt.format(
+                    file_path=truncation_record.file_path,
+                    recent_changes=truncation_record.recent_changes,
+                    prev_section=truncation_record.prev_section,
+                    code_block=truncation_record.code_block,
+                    retrieval_results=truncation_record.retrieval_results,
+                    initial_file=truncation_record.initial_file,
+                    start_line=truncation_record.start_line,
+                    end_line=truncation_record.end_line,
+                )
+                + f"\n{truncation_record.prefill}"
         )
         current_token_count = (
-            formatted_prompt_minimal_token_count + retrieval_results_token_count
+                formatted_prompt_minimal_token_count + retrieval_results_token_count
         )
 
         partial_formatted_file_chunks = ""
         all_chunks_token_count = 0
         chunks_that_fit = []
         for chunk, chunk_token_count in zip(
-            truncation_record.file_chunks, chunks_token_count
+                truncation_record.file_chunks, chunks_token_count
         ):
             current_chunk_str = chunk.to_string()
             all_chunks_token_count += chunk_token_count
@@ -1697,7 +1727,7 @@ def truncate_prompt_when_near_limit(
             partial_formatted_file_chunks += current_chunk_str
             chunks_that_fit.append(chunk)
         final_prompt = (
-            partial_formatted_file_chunks + formatted_prompt_with_retrieval_chunks
+                partial_formatted_file_chunks + formatted_prompt_with_retrieval_chunks
         )
         file_chunks_count = len(chunks_that_fit)
         file_chunks_char_count = sum(len(chunk.content) for chunk in chunks_that_fit)
@@ -1754,8 +1784,8 @@ def should_disable_autocomplete(file_contents: str) -> tuple[bool, str]:
     if num_lines > 1000:
         length_counter = Counter(len(line) for line in lines)
         if (
-            sum(length_counter[length] for length in length_counter if length > 120)
-            > num_lines * 0.3
+                sum(length_counter[length] for length in length_counter if length > 120)
+                > num_lines * 0.3
         ):
             return True, f"30% of lines are > 120 chars"
 
@@ -1773,18 +1803,18 @@ def should_disable_autocomplete(file_contents: str) -> tuple[bool, str]:
 
 
 def fetch_next_edits(
-    file_path: str,
-    file_contents: str,
-    recent_changes: str,
-    cursor_position: int,
-    original_file_contents: str | None = None,
-    file_chunks: list[FileChunkData] = None,
-    retrieval_chunks: list[FileChunkData] = None,
-    recent_user_actions: list[UserAction] = None,
-    recent_changes_high_res: str = "",
-    changes_above_cursor: bool = False,
-    is_new_user: bool = False,
-    editor_diagnostics: list[EditorDiagnostic] = None,
+        file_path: str,
+        file_contents: str,
+        recent_changes: str,
+        cursor_position: int,
+        original_file_contents: str | None = None,
+        file_chunks: list[FileChunkData] = None,
+        retrieval_chunks: list[FileChunkData] = None,
+        recent_user_actions: list[UserAction] = None,
+        recent_changes_high_res: str = "",
+        changes_above_cursor: bool = False,
+        is_new_user: bool = False,
+        editor_diagnostics: list[EditorDiagnostic] = None,
 ):
     if is_new_user:
         logger.debug(f"New user detected, disabling changes_above_cursor")
@@ -1880,13 +1910,24 @@ def fetch_next_edits(
         return
 
     if all_completions and not all(
-        (
-            not completion.completion.strip("\n")
-            and completion.start_index == completion.end_index
-        )
-        for completion in all_completions
+            (
+                    not completion.completion.strip("\n")
+                    and completion.start_index == completion.end_index
+            )
+            for completion in all_completions
     ):
         yield all_completions[0], all_completions, formatted_prompt, metadata
+        return
+
+    if not ENABLE_RETRIEVAL_FALLBACK:
+        yield (
+            AutocompleteResult(0, 0, "", 0, autocomplete_id),
+            [],
+            formatted_prompt,
+            AutocompleteMetadata(
+                exit_reason="retrieval_fallback_disabled", is_retrieval_autocomplete=False
+            ),
+        )
         return
 
     with Timer(min_time=0.001, precision=3, name="find_best_matching_block"):
@@ -1906,13 +1947,13 @@ def fetch_next_edits(
             diagnostic_line = file_contents_lines[diagnostic.line_number] if diagnostic.line_number < len(file_contents_lines) else ""
             # add it as the first one
             retrieval_chunks = [
-                FileChunkData(
-                    content=f"{diagnostic.message} at line {diagnostic.line_number}:\n{diagnostic_line}",
-                    file_path="diagnostics",
-                    start_line=1,
-                    end_line=2,
-                )
-            ] + retrieval_chunks
+                                   FileChunkData(
+                                       content=f"{diagnostic.message} at line {diagnostic.line_number}:\n{diagnostic_line}",
+                                       file_path="diagnostics",
+                                       start_line=1,
+                                       end_line=2,
+                                   )
+                               ] + retrieval_chunks
 
     if not retrieved_code_block:
         yield (
@@ -1934,7 +1975,7 @@ def fetch_next_edits(
     )  # +1 to include the cursor line
 
     suffix_lines = file_contents[
-        block_start_offset + len(retrieved_code_block) :
+        block_start_offset + len(retrieved_code_block):
     ].splitlines(True)
     retrieved_suffix = "".join(suffix_lines[:num_suffix_lines])
     cursor_position_in_block = block_start_offset + len(
@@ -1976,16 +2017,16 @@ def fetch_next_edits(
             file_chunks=file_chunks,
             retrieval_chunks=retrieval_chunks,
             recent_user_actions=recent_user_actions
-            + [
-                UserAction(
-                    action_type="CURSOR_MOVEMENT",
-                    offset=cursor_position_in_block,
-                    line_number=get_line_number_from_position(
-                        file_contents=file_contents, position=cursor_position_in_block
-                    ),
-                    file_path=file_path,
-                )
-            ],
+                                + [
+                                    UserAction(
+                                        action_type="CURSOR_MOVEMENT",
+                                        offset=cursor_position_in_block,
+                                        line_number=get_line_number_from_position(
+                                            file_contents=file_contents, position=cursor_position_in_block
+                                        ),
+                                        file_path=file_path,
+                                    )
+                                ],
             recent_changes_high_res=recent_changes_high_res,
             changes_above_cursor=changes_above_cursor,
         )

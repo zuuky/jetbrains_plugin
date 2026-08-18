@@ -3,11 +3,11 @@ from typing import Callable, Iterable, Union
 
 
 def pack_items_for_prompt(
-    iterable: Iterable,
-    string_function: Union[callable, None],
-    token_limit: int,
-    char_token_ratio: int = 3.5,
-    truncate_from_end: bool = True,
+        iterable: Iterable,
+        string_function: Union[callable, None],
+        token_limit: int,
+        char_token_ratio: int = 3.5,
+        truncate_from_end: bool = True,
 ) -> list:
     """
     Packs items from an iterable into a list of strings, using a string function to convert each item to a string.
@@ -33,7 +33,9 @@ def pack_items_for_prompt(
                 current_str = item_str + current_str
             else:
                 break
-    logger.info(
-        f"Removed {len(iterable) - len(packed_items)} items to fit within the token limit ({len(packed_items)} items remaining). Final token estimate: {int(len(current_str) // char_token_ratio)}"
+    logger.debug(
+        f"Removed {len(iterable) - len(packed_items)} items to fit within the "
+        f"token limit ({len(packed_items)} items remaining). Final token estimate: "
+        f"{int(len(current_str) // char_token_ratio)}"
     )
     return packed_items

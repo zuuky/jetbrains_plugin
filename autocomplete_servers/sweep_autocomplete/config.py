@@ -1,6 +1,6 @@
-"""Server settings — single source of truth, overridable via environment variables.
+"""Server settings — 只保留常用项，环境变量可覆盖。
 
-Defaults are tuned for the lowest autocomplete latency (see README.md).
+其余 llama.cpp 细节参数已内部固定为稳妥的 GPU 默认值，不再暴露。
 """
 
 import os
@@ -21,14 +21,13 @@ def _bool(name: str, default: bool) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Endpoint
+# 端点
 # ---------------------------------------------------------------------------
-# Remote SGLang / OpenAI-compatible endpoint (e.g. "http://host:8000").
-# Leave empty to run the local llama.cpp model.
+# 远程 OpenAI 兼容端点；留空 = 使用本地模型
 NEXT_EDIT_AUTOCOMPLETE_ENDPOINT = os.environ.get("NEXT_EDIT_AUTOCOMPLETE_ENDPOINT") or None
 
 # ---------------------------------------------------------------------------
-# Local GGUF model
+# 本地 GGUF 模型
 # ---------------------------------------------------------------------------
 MODEL_PATH = os.environ.get(
     "MODEL_PATH",
@@ -36,43 +35,39 @@ MODEL_PATH = os.environ.get(
 )
 
 # ---------------------------------------------------------------------------
-# llama.cpp runtime (tuned for best autocomplete speed on a GPU server)
+# llama.cpp —— 常用参数（可覆盖）
 # ---------------------------------------------------------------------------
-# Context must comfortably fit the ~9.5k-token max prompt.
-LOCAL_MODEL_N_CTX = _int("LOCAL_MODEL_N_CTX", 16384)
-# Larger batches speed up prompt (prefill) evaluation.
-LOCAL_MODEL_N_BATCH = _int("LOCAL_MODEL_N_BATCH", 4096)
-LOCAL_MODEL_N_UBATCH = _int("LOCAL_MODEL_N_UBATCH", 2048)
-# -1 = offload all layers to GPU; 0 = CPU only (required for CPU-only builds).
-LOCAL_MODEL_N_GPU_LAYERS = _int("LOCAL_MODEL_N_GPU_LAYERS", -1)
-# 0 = let llama.cpp auto-detect the best thread count.
-LOCAL_MODEL_N_THREADS = _int("LOCAL_MODEL_N_THREADS", 0)
-LOCAL_MODEL_N_THREADS_BATCH = _int("LOCAL_MODEL_N_THREADS_BATCH", 0)
-LOCAL_MODEL_DRAFT_TOKENS = _int("LOCAL_MODEL_DRAFT_TOKENS", 32)
+LOCAL_MODEL_N_CTX = _int("LOCAL_MODEL_N_CTX", 16384)  # 上下文长度
+LOCAL_MODEL_N_GPU_LAYERS = _int("LOCAL_MODEL_N_GPU_LAYERS", -1)  # -1 = 全部层进 GPU
+LOCAL_MODEL_N_THREADS = _int("LOCAL_MODEL_N_THREADS", 8)  # 0 = 自动
 
-# Prompt-lookup speculative decoding; helps long generations on CPU,
-# adds overhead on fast GPUs with short completions — off by default.
+# 提速相关（谨慎调整；默认值为稳妥基线）
+LOCAL_MODEL_N_BATCH = _int("LOCAL_MODEL_N_BATCH", 2048)  # 每批最大 token 数；调大可加速 prefill
+LOCAL_MODEL_N_UBATCH = _int("LOCAL_MODEL_N_UBATCH", 1024)  # 内部计算批，需 <= N_BATCH
+LOCAL_MODEL_FLASH_ATTN = _bool("LOCAL_MODEL_FLASH_ATTN", False)  # 需构建带 GGML_FLASH_ATTN，否则加载失败
+
+# 投机解码（prompt-lookup，默认关，方便对比；开启时代码会自动补 logits_all）
 LOCAL_MODEL_USE_DRAFT = _bool("LOCAL_MODEL_USE_DRAFT", False)
-# Requires a build with GGML_FLASH_ATTN (enabled in the official wheels / CUDA builds).
-LOCAL_MODEL_FLASH_ATTN = _bool("LOCAL_MODEL_FLASH_ATTN", True)
-LOCAL_MODEL_OFFLOAD_KQV = _bool("LOCAL_MODEL_OFFLOAD_KQV", True)
-LOCAL_MODEL_MUL_MAT_Q = _bool("LOCAL_MODEL_MUL_MAT_Q", True)
-LOCAL_MODEL_USE_MMAP = _bool("LOCAL_MODEL_USE_MMAP", True)
-LOCAL_MODEL_USE_MLOCK = _bool("LOCAL_MODEL_USE_MLOCK", False)
-# logits_all only matters when requesting per-token logprobs — keep off for speed.
+LOCAL_MODEL_DRAFT_TOKENS = _int("LOCAL_MODEL_DRAFT_TOKENS", 32)
 LOCAL_MODEL_LOGITS_ALL = _bool("LOCAL_MODEL_LOGITS_ALL", False)
-LOCAL_MODEL_VERBOSE = _bool("LOCAL_MODEL_VERBOSE", False)
+
+# 内部固定取值（GPU 下稳妥）
+_LOCAL_MODEL_N_THREADS_BATCH = 16
+_LOCAL_MODEL_OFFLOAD_KQV = True
+_LOCAL_MODEL_MUL_MAT_Q = True
+_LOCAL_MODEL_USE_MMAP = True
+_LOCAL_MODEL_USE_MLOCK = False
+_LOCAL_MODEL_VERBOSE = False
 
 # ---------------------------------------------------------------------------
-# Behavior
+# 行为
 # ---------------------------------------------------------------------------
-# When no suggestion is produced, search the file for a matching block and
-# retry. Adds latency only on the "no suggestion" path.
+# 无建议时检索文件重试（仅在"无建议"路径上增加延迟）
 ENABLE_RETRIEVAL_FALLBACK = _bool("ENABLE_RETRIEVAL_FALLBACK", True)
 
 # ---------------------------------------------------------------------------
-# Diagnostics (keep off by default — they slow the hot path and bloat logs)
+# 诊断日志（默认关，避免拖慢热路径/刷屏）
 # ---------------------------------------------------------------------------
 LOG_MODEL_PROMPT = _bool("LOG_MODEL_PROMPT", False)
 LOG_MODEL_RAW_OUTPUT = _bool("LOG_MODEL_RAW_OUTPUT", False)
-MODEL_LOG_MAX_CHARS = _int("MODEL_LOG_MAX_CHARS", 0)  # 0 = unlimited
+MODEL_LOG_MAX_CHARS = _int("MODEL_LOG_MAX_CHARS", 0)  # 0 = 不限

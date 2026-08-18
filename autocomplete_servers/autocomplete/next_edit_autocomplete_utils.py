@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass
-
 from loguru import logger
 
 CHARS_PER_TOKEN = 3.5

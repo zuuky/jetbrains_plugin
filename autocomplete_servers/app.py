@@ -1,12 +1,11 @@
 import json
 import time
 import traceback
-
 from fastapi import Body
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-
+from loguru import logger
 from sweep_autocomplete.autocomplete.next_edit_autocomplete import (
     AutocompleteMetadata,
     fetch_next_edits,
@@ -17,7 +16,6 @@ from sweep_autocomplete.dataclasses.file_chunk_data import (
     UserAction,
 )
 from sweep_autocomplete.utils.compression_middleware import RequestCompressionMiddleware
-from loguru import logger
 
 app = FastAPI()
 

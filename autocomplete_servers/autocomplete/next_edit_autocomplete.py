@@ -3,16 +3,15 @@ from __future__ import annotations
 import json
 import math
 import re
+import regex
+import requests
 import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal, Optional
-
-import regex
-import requests
+from loguru import logger
 from pydantic import BaseModel
-
+from sweep_autocomplete.autocomplete.llm_local import generate_completion, RequestCancelled
 from sweep_autocomplete.autocomplete.next_edit_autocomplete_retrieval import (
     find_best_matching_block,
 )
@@ -36,16 +35,15 @@ from sweep_autocomplete.autocomplete.next_edit_autocomplete_utils import (
     strip_leading_empty_newlines,
     truncate_long_lines,
 )
-from sweep_autocomplete.autocomplete.llm_local import generate_completion, RequestCancelled
 from sweep_autocomplete.config import NEXT_EDIT_AUTOCOMPLETE_ENDPOINT
 from sweep_autocomplete.dataclasses.file_chunk_data import (
     EditorDiagnostic,
     FileChunkData,
     UserAction,
 )
-from loguru import logger
 from sweep_autocomplete.utils.str_utils import pack_items_for_prompt
 from sweep_autocomplete.utils.timer import Timer
+from typing import Any, Literal, Optional
 
 NUM_LINES_BEFORE = 2
 NUM_LINES_AFTER = 5
@@ -55,7 +53,6 @@ CHARS_PER_TOKEN = 3.5
 def estimate_token_count(text: str) -> int:
     """Estimate token count using character-based approximation."""
     return int(len(text) / CHARS_PER_TOKEN)
-
 
 MAX_INPUT_TOKENS_COUNT = (8192 * 4) - 256  # ~8k tokens at 3.5 chars/token, fits in 32k ctx
 CHARACTER_BOUND_TO_CHECK_TOKENIZATION = (8192 * 2) - 256  # ~4k tokens

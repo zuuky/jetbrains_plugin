@@ -1,9 +1,7 @@
-import gzip
-
 import brotli
-from starlette.types import ASGIApp, Receive, Scope, Send
-
+import gzip
 from loguru import logger
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 class RequestCompressionMiddleware:

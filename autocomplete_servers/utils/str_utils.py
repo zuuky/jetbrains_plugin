@@ -1,6 +1,5 @@
-from typing import Callable, Iterable, Union
-
 from loguru import logger
+from typing import Callable, Iterable, Union
 
 
 def pack_items_for_prompt(

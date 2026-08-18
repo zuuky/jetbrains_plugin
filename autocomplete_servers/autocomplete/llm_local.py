@@ -1,12 +1,10 @@
 import os
 import threading
 import time
-from typing import Any
-
 from llama_cpp import Llama
 from llama_cpp.llama_speculative import LlamaPromptLookupDecoding
-
 from loguru import logger
+from typing import Any
 
 _model: Llama | None = None
 _model_lock = threading.Lock()

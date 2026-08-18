@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import difflib
+import numpy as np
 import re
 from functools import lru_cache
-
-import numpy as np
+from loguru import logger
 from scipy.sparse import csr_matrix
-
 from sweep_autocomplete.autocomplete.next_edit_autocomplete_utils import (
     extract_diff_parts,
     parse_hunk,
@@ -14,7 +13,6 @@ from sweep_autocomplete.autocomplete.next_edit_autocomplete_utils import (
     get_line_number_from_position,
 )
 from sweep_autocomplete.dataclasses.file_chunk_data import EditorDiagnostic
-from loguru import logger
 from sweep_autocomplete.utils.timer import Timer
 
 # Precompile regex for better performance with case-insensitive flag

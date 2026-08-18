@@ -18,9 +18,9 @@ class AutocompleteExclusionNotificationProvider : EditorNotificationProvider {
         project: Project,
         file: VirtualFile,
     ): Function<in FileEditor, out JComponent?> =
-        Function { fileEditor ->
+        Function { _ ->
             if (shouldShowBanner(project, file)) {
-                createNotificationPanel(project, file)
+                createNotificationPanel(project)
             } else {
                 null
             }
@@ -41,21 +41,18 @@ class AutocompleteExclusionNotificationProvider : EditorNotificationProvider {
         return shouldExcludeFromAutocomplete(project, file.path)
     }
 
-    private fun createNotificationPanel(
-        project: Project,
-        file: VirtualFile,
-    ): EditorNotificationPanel {
+    private fun createNotificationPanel(project: Project): EditorNotificationPanel {
         val panel = EditorNotificationPanel(EditorNotificationPanel.Status.Info)
 
         panel.text = "Sweep autocomplete is disabled for this file (matched an exclusion pattern or .gitignore)."
 
-        panel.createActionLabel("Don't Show Again") {
+        panel.createActionLabel("Don't show again") {
             SweepSettings.getInstance().hideAutocompleteExclusionBanner = true
             // Refresh notifications to hide this banner
             EditorNotifications.getInstance(project).updateAllNotifications()
         }
 
-        panel.createActionLabel("Configure Excluded Files") {
+        panel.createActionLabel("Configure excluded files") {
             ShowSettingsUtil.getInstance().showSettingsDialog(project, SweepSettingsConfigurable::class.java)
         }
 

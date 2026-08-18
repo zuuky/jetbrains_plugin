@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package dev.sweep.assistant.utils
 
 import com.github.difflib.DiffUtils

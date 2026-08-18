@@ -1,6 +1,5 @@
 package dev.sweep.assistant.autocomplete.edit
 
-import com.intellij.codeInsight.completion.CompletionService
 import com.intellij.codeInsight.daemon.impl.HighlightInfo
 import com.intellij.codeInsight.daemon.impl.HighlightInfoType
 import com.intellij.codeInsight.daemon.impl.HighlightVisitor
@@ -108,7 +107,6 @@ class GhostTextRenderer(
      */
     val font
         get() = UIUtil.getFontWithFallback(editor.colorsScheme.getFont(EditorFontType.PLAIN))
-    private val isCompletionPopupVisible = CompletionService.getCompletionService().currentCompletion != null
     private val hintText: String
         get() {
             val action = ActionManager.getInstance().getAction(AcceptEditCompletionAction.ACTION_ID)
@@ -296,7 +294,7 @@ class GhostTextRenderer(
      */
     @RequiresReadLock
     private fun findBestContextRange(
-        document: com.intellij.openapi.editor.Document,
+        document: Document,
         currentLine: Int,
         offset: Int,
     ): Pair<Int, Int> {
@@ -323,7 +321,7 @@ class GhostTextRenderer(
                         }
                     }
 
-                    val range = bestElement?.linesRange(document) ?: IntRange(currentLine, currentLine)
+                    val range = bestElement.linesRange(document)
                     return Pair(range.first, range.last)
                 }
             } catch (e: Exception) {
@@ -885,7 +883,7 @@ class GhostTextRenderer(
                 if (segments.isEmpty()) {
                     getUnhighlightedSegments(text)
                 } else {
-                    groupSegmentsByLines(segments, text)
+                    groupSegmentsByLines(segments)
                 }
 
             return result
@@ -900,10 +898,7 @@ class GhostTextRenderer(
     /**
      * Group segments by lines, splitting segments that contain newlines
      */
-    private fun groupSegmentsByLines(
-        segments: List<HighlightedSegment>,
-        originalText: String,
-    ): List<List<HighlightedSegment>> {
+    private fun groupSegmentsByLines(segments: List<HighlightedSegment>): List<List<HighlightedSegment>> {
         val result = mutableListOf<MutableList<HighlightedSegment>>()
         result.add(mutableListOf()) // Start with first line
 

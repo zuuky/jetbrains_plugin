@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package dev.sweep.assistant.theme
 
 import com.intellij.openapi.editor.colors.EditorColorsManager

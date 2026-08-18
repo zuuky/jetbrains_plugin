@@ -11,6 +11,7 @@ import javax.swing.KeyStroke
  * When a user configures a keystroke for AcceptEditCompletionAction or RejectEditCompletionAction,
  * we need to intercept the corresponding low-level EditorAction to handle autocomplete.
  */
+@Suppress("DEPRECATION")
 object KeystrokeToEditorActionMapper {
     /**
      * Maps a keystroke to its corresponding EditorAction ID.

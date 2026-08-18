@@ -35,6 +35,7 @@ class IdeaVimIntegrationService(
     /**
      * Checks if IdeaVim plugin is installed and enabled
      */
+    @Suppress("DEPRECATION")
     fun isIdeaVimActive(): Boolean {
         val pluginId = PluginId.getId(IDEAVIM_PLUGIN_ID)
         return PluginManagerCore.isPluginInstalled(pluginId) &&
@@ -53,28 +54,6 @@ class IdeaVimIntegrationService(
             escHandler.execute(editor, editor.caretModel.currentCaret, dataContext)
         }
     }
-
-    /**
-     * Checks if showing ghost text at the given position would conflict with VIM plugin
-     */
-    fun wouldConflictWithVim(
-        editor: Editor,
-        offset: Int,
-    ): Boolean {
-        if (!isIdeaVimActive()) return false
-
-        // VIM plugin has issues with inlays at column 0
-        val document = editor.document
-        val line = document.getLineNumber(offset)
-        val lineStartOffset = document.getLineStartOffset(line)
-        return offset == lineStartOffset && editor.caretModel.offset == lineStartOffset
-    }
-
-    /**
-     * Checks if IdeaVim plugin is installed and enabled
-     * @deprecated Use isIdeaVimActive() instead
-     */
-    private fun isIdeaVimInstalled(): Boolean = isIdeaVimActive()
 
     /**
      * Gets the path to the user's .ideavimrc file
@@ -140,7 +119,7 @@ class IdeaVimIntegrationService(
                     .getInstance()
                     .getNotificationGroup("Sweep AI Notifications")
                     .createNotification(
-                        "IdeaVim Integration Complete",
+                        "IdeaVim integration complete",
                         "Sweep has configured your Vim settings for Tab completion. Please restart your IDE to activate the changes.",
                         NotificationType.INFORMATION,
                     ).addAction(

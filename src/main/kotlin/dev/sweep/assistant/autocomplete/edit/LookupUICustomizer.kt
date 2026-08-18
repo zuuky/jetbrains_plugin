@@ -33,6 +33,7 @@ class LookupUICustomizer(
      * Initializes the lookup listener to monitor when lookups become active
      * and customize their UI accordingly.
      */
+    @Suppress("DEPRECATION")
     fun initialize() {
         val lookupManager = LookupManager.getInstance(project)
         propertyChangeListener =
@@ -99,7 +100,7 @@ class LookupUICustomizer(
                                 lookupComponent.revalidate()
                                 lookupComponent.repaint()
                             }
-                        } catch (e: Exception) {
+                        } catch (_: Exception) {
                             // Ignore exceptions during cleanup
                         }
                     }

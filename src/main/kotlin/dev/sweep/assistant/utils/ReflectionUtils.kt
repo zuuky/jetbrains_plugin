@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package dev.sweep.assistant.utils
 
 fun tryLoadClass(name: String) = runCatching { Class.forName(name) }.getOrNull()

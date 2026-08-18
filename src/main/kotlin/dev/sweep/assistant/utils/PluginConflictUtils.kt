@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package dev.sweep.assistant.utils
 
 import com.intellij.ide.actions.ShowSettingsUtilImpl

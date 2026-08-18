@@ -177,7 +177,7 @@ class SweepStartupActivity :
                         notificationGroup = "Sweep Autocomplete",
                         notificationType = NotificationType.WARNING,
                         action =
-                            object : NotificationAction("Open Settings") {
+                            object : NotificationAction("Open settings") {
                                 override fun actionPerformed(
                                     e: AnActionEvent,
                                     notification: com.intellij.notification.Notification,

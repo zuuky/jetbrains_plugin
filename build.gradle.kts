@@ -16,7 +16,7 @@ val pluginId = "dev.sweep.assistant"
 val pluginName = "sweep-jetbrains"
 println("Building plugin: $pluginName with ID: $pluginId")
 group = "dev.sweep"
-version = "1.29.6"
+version = "1.30.0"
 
 repositories {
     mavenCentral()

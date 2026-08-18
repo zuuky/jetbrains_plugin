@@ -30,8 +30,6 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.util.concurrency.AppExecutorUtil
 import com.intellij.util.concurrency.annotations.RequiresBackgroundThread
-import com.intellij.util.concurrency.annotations.RequiresBlockingContext
-import com.intellij.util.concurrency.annotations.RequiresReadLockAbsence
 import dev.sweep.assistant.autocomplete.Debouncer
 import dev.sweep.assistant.services.*
 import dev.sweep.assistant.settings.SweepMetaData
@@ -58,8 +56,6 @@ import kotlin.math.abs
 
 // 修复：添加 EDT 检查避免死锁
 @RequiresBackgroundThread
-@RequiresBlockingContext
-@RequiresReadLockAbsence
 private fun getVisibleLineRange(editor: Editor): Pair<Int, Int>? {
     val app = ApplicationManager.getApplication()
     return if (app.isDispatchThread) {
@@ -136,7 +132,7 @@ private fun getVisibleFileChunk(
 }
 
 private fun invokeLaterIfGatewayModeClient(
-    project: Project,
+    @Suppress("UNUSED_PARAMETER") project: Project,
     block: () -> Unit,
 ) {
     if (SweepConstants.GATEWAY_MODE == SweepConstants.GatewayMode.CLIENT) {
@@ -254,7 +250,7 @@ private class DefinitionChunkCache(
                 } catch (e: CancellationException) {
                     deferred.cancel(e)
                     throw e
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     deferred.complete(emptyList())
                 }
             }
@@ -276,7 +272,7 @@ private class DefinitionChunkCache(
                     withTimeout(2000L) {
                         entry.result.await()
                     }
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     // Timeout or cancellation - fall through to sync fetch
                     entry.job.cancel()
                     return fetchSync(editorState)
@@ -298,17 +294,10 @@ private class DefinitionChunkCache(
         runCatching {
             getDefinitions(editorState)
         }.getOrElse { emptyList() }
-
-    /**
-     * Invalidates the cache.
-     */
-    fun invalidate() {
-        cacheEntry?.job?.cancel()
-        cacheEntry = null
-    }
 }
 
 @Service(Service.Level.PROJECT)
+@Suppress("DEPRECATION", "unused", "NlsCapitalizationInspection", "DialogTitleCapitalization")
 class RecentEditsTracker(
     private val project: Project,
 ) : Disposable {
@@ -320,21 +309,17 @@ class RecentEditsTracker(
     companion object {
         fun getInstance(project: Project): RecentEditsTracker = project.getService(RecentEditsTracker::class.java)
 
-        const val PAUSE_THRESHOLD = 200L
         const val MAX_EDITS_TRACKED = 16
         const val MAX_HIGH_RES_EDITS_TRACKED = 16
         const val FILE_SWITCH_MOVEMENT_THRESHOLD = 8000L
         const val HIGH_RES_RECENT_CHANGES_TO_SEND = 16
         const val RECENT_CHANGES_TO_SEND = 6
-        const val MAX_FETCH_JOBS = 8
         const val MAX_CURSOR_POSITIONS_TRACKED = 16
         const val CHUNK_SIZE_LINES = 200
         const val CHUNK_OVERLAP_LINES = 100
         const val MAX_CHUNKS_TO_SEND = 5
         const val MAX_RETRIEVAL_CHUNK_SIZE = 200
-        const val CURSOR_POSITION_LIFESPAN = 30_000L
         const val CURSOR_MOVEMENT_REJECTION_THRESHOLD = 1000L
-        const val TRACK_CURSOR_POSITIONS_ENABLED = true
         const val MAX_RECENT_CURSOR_POSITIONS = 50
         const val MAX_RECENT_USER_ACTIONS = 50
         const val MAX_CLIPBOARD_LINES = 20
@@ -1070,8 +1055,6 @@ class RecentEditsTracker(
                                 suggestion.shownTime > 0 &&
                                     (System.currentTimeMillis() - suggestion.shownTime) < CURSOR_MOVEMENT_REJECTION_THRESHOLD
                             }
-
-                            else -> false
                         }
                     } ?: false
 
@@ -1832,8 +1815,8 @@ class RecentEditsTracker(
      * Check if the given file path matches any exclusion pattern
      * (includes user-configured patterns and the project `.gitignore`, supports folders).
      */
-    private fun shouldExcludeFromAutocomplete(filePath: String): Boolean =
-        dev.sweep.assistant.utils.shouldExcludeFromAutocomplete(project, filePath)
+    private fun isFileExcluded(filePath: String): Boolean =
+        shouldExcludeFromAutocomplete(project, filePath)
 
     /**
      * Check if the user is currently in a template or refactoring UI
@@ -1846,11 +1829,7 @@ class RecentEditsTracker(
         val templateState =
             com.intellij.codeInsight.template.impl.TemplateManagerImpl
                 .getTemplateState(editor)
-        if (templateState != null && !templateState.isFinished) {
-            return true
-        }
-
-        return false
+        return templateState != null && !templateState.isFinished
     }
 
     fun processLatestEdit() {
@@ -1877,7 +1856,7 @@ class RecentEditsTracker(
                 }
 
                 // Check if current file should be excluded from autocomplete
-                if (shouldExcludeFromAutocomplete(editorState.filePath)) {
+                if (isFileExcluded(editorState.filePath)) {
                     return@launch
                 }
 
@@ -2124,7 +2103,7 @@ class RecentEditsTracker(
                 FileEditorManager
                     .getInstance(
                         project,
-                    ).getSelectedEditor(virtualFile) as? com.intellij.openapi.fileEditor.TextEditor
+                    ).getSelectedEditor(virtualFile) as? TextEditor
             val textEditor = editor?.editor
 
             if (textEditor != null) {
@@ -2292,12 +2271,11 @@ class RecentEditsTracker(
 
             val stackTrace = e.stackTraceToString().take(500) // Limit stack trace length
             NotificationDeduplicationService.getInstance(project).showNotificationWithDeduplicationAndErrorReporting(
-                title = "Autocomplete Error",
+                title = "Autocomplete error",
                 content = "Failed to fetch next edit autocomplete: ${e.message}\n\nStack trace:\n$stackTrace",
                 notificationGroup = "Sweep Autocomplete",
                 type = NotificationType.ERROR,
                 exception = e,
-                errorContext = "Autocomplete fetch failed: ${e.message}",
             )
             return null
         }

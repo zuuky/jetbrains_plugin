@@ -20,8 +20,7 @@ class SweepActionPromoter : ActionPromoter {
         context: DataContext,
     ): List<AnAction> {
         val project = context.getData(CommonDataKeys.PROJECT) ?: return actions
-        val editor = context.getData(CommonDataKeys.EDITOR)
-        if (editor == null) return actions
+        val editor = context.getData(CommonDataKeys.EDITOR) ?: return actions
 
         val settings =
             runCatching {

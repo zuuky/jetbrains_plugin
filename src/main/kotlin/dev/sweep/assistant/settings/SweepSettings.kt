@@ -132,13 +132,6 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
      */
     var autocompleteRemoteUrl: String = "http://10.218.230.4:$autocompleteLocalPort"
 
-    /** Returns the effective autocomplete server URL. Priority: 服务地址 > 本机 localhost。 */
-    fun getEffectiveAutocompleteUrl(): String {
-        val remoteUrl = autocompleteRemoteUrl.trim()
-        if (remoteUrl.isNotBlank()) return remoteUrl
-        return "http://localhost:$autocompleteLocalPort"
-    }
-
     /// Commit message LLM configuration
 
     /**
@@ -162,9 +155,9 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
     /** 是否自动将项目 .gitignore 中的模式并入自动补全排除（默认开启）。 */
     var excludeGitignorePatterns: Boolean = true
 
-    var autocompleteExclusionPatterns: Set<String> = emptySet()
+    private var autocompleteExclusionPatterns: Set<String> = emptySet()
 
-    var autocompleteExclusionPatternsV2: Set<String> = setOf(".env")
+    private var autocompleteExclusionPatternsV2: Set<String> = setOf(".env")
 
     fun allAutocompleteExclusionPatterns(): Set<String> =
         autocompleteExclusionPatterns + autocompleteExclusionPatternsV2
@@ -182,15 +175,7 @@ class SweepSettings : PersistentStateComponent<SweepSettings> {
     // Include recent commit messages as style reference when generating a commit message
     var useCustomizedCommitMessages: Boolean = true
 
-    /**
-     * Determines if the plugin is considered "configured".
-     * For this local build, settings are always considered set as long as
-     * next-edit autocomplete is enabled.
-     */
-    val hasBeenSet: Boolean
-        get() = true
-
-    fun notifySettingsChanged() {
+    private fun notifySettingsChanged() {
         ApplicationManager.getApplication().invokeLater {
             ApplicationManager
                 .getApplication()

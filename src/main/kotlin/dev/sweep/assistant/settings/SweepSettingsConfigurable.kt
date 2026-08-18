@@ -485,7 +485,7 @@ class SweepSettingsConfigurable(
      */
     private fun probeCommitMessageServer(url: String): String {
         if (url.isBlank()) return "配置错误：请先填写 LLM 服务地址。"
-        val endpoints = listOf("$url/v1/models", "$url/health", "$url")
+        val endpoints = listOf("$url/v1/models", "$url/health", url)
         for (endpoint in endpoints) {
             var connection: HttpURLConnection? = null
             try {
@@ -504,7 +504,7 @@ class SweepSettingsConfigurable(
                         "连接成功：${endpoint}"
                     }
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 // Try next endpoint
             } finally {
                 connection?.disconnect()
@@ -519,7 +519,7 @@ class SweepSettingsConfigurable(
             val json = com.google.gson.JsonParser.parseString(body)
             val data = json.asJsonObject?.getAsJsonArray("data") ?: return ""
             data.take(8).mapNotNull { it.asJsonObject?.get("id")?.asString }.joinToString(", ")
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             ""
         }
     }

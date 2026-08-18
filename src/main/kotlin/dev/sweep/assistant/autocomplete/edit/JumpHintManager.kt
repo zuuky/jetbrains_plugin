@@ -2,7 +2,10 @@ package dev.sweep.assistant.autocomplete.edit
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
-import com.intellij.openapi.editor.*
+import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.EditorCustomElementRenderer
+import com.intellij.openapi.editor.Inlay
+import com.intellij.openapi.editor.InlayProperties
 import com.intellij.openapi.editor.event.VisibleAreaListener
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileEditorManager
@@ -66,6 +69,7 @@ class JumpHintManager(
     /**
      * Creates the jump inline inlay at the end of the target line
      */
+    @Suppress("UNCHECKED_CAST")
     private fun createJumpInlay() {
         if (inlineInlay != null) return
 
@@ -305,7 +309,7 @@ class JumpInlineRenderer(
  */
 class JumpHintRenderer(
     private val editor: Editor,
-    private val isTargetBelow: Boolean,
+    isTargetBelow: Boolean,
     parentDisposable: Disposable,
 ) : Disposable {
     private val tabText: String
@@ -370,12 +374,5 @@ class JumpHintRenderer(
 
     override fun dispose() {
         // No resources to clean up for this renderer
-    }
-
-    companion object {
-        /**
-         * Gets the preferred size for the jump hint component
-         */
-        val PREFERRED_SIZE = Dimension(160, 30)
     }
 }

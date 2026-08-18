@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package dev.sweep.assistant.agent.tools
 
 import com.intellij.openapi.diagnostic.Logger
@@ -240,7 +242,7 @@ class TerminalApiWrapper {
                             ?: throw RuntimeException("Unable to access terminal widget")
                     val shellWidget = jbWidget as ShellTerminalWidget
                     return shellWidget.text.trim()
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     throw RuntimeException("Unable to access terminal widget")
                 }
             } catch (e: Exception) {

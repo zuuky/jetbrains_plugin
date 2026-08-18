@@ -24,7 +24,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 
-class DiffTooLargeException(val diffTokens: Int, val maxTokens: Int) : Exception(
+class DiffTooLargeException(diffTokens: Int, maxTokens: Int) : Exception(
     "Diff too large: $diffTokens tokens exceeds maximum $maxTokens tokens. Please reduce the number of files in this commit."
 )
 
@@ -95,14 +95,11 @@ class SweepCommitMessageService(
         } catch (_: CancellationException) {
             logger.debug("Commit message generation cancelled")
             generating.set(false)
-        } catch (e: DiffTooLargeException) {
+        } catch (_: DiffTooLargeException) {
             generating.set(false)
-        } catch (e: TimeoutException) {
+        } catch (_: TimeoutException) {
             generating.set(false)
-            showErrorNotification(
-                "Request Timeout",
-                "Commit message generation timed out after 10 seconds. Please try again."
-            )
+            showCommitMessageTimeoutNotification()
         } catch (e: Exception) {
             logger.warn("Error making API call", e)
             generating.set(false)
@@ -351,12 +348,16 @@ class SweepCommitMessageService(
         return null
     }
 
-    private fun showErrorNotification(title: String, content: String) {
+    private fun showCommitMessageTimeoutNotification() {
         ApplicationManager.getApplication().invokeLater {
             try {
                 NotificationGroupManager.getInstance()
                     .getNotificationGroup("Sweep Commit Message")
-                    .createNotification(title, content, NotificationType.WARNING)
+                    .createNotification(
+                        "Request timeout",
+                        "Commit message generation timed out after 10 seconds. Please try again.",
+                        NotificationType.WARNING,
+                    )
                     .notify(project)
             } catch (e: Exception) {
                 logger.warn("Failed to show notification: ${e.message}", e)
@@ -366,8 +367,6 @@ class SweepCommitMessageService(
 
     companion object {
         private const val MAX_INPUT_TOKENS = 50000
-
-        private val logger = Logger.getInstance(SweepCommitMessageService::class.java)
 
         fun getInstance(project: Project): SweepCommitMessageService = project.getService(SweepCommitMessageService::class.java)
     }

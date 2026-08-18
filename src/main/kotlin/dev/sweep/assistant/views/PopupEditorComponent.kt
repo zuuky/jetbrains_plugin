@@ -1,6 +1,5 @@
 package dev.sweep.assistant.views
 
-import com.intellij.codeInsight.completion.CompletionService
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.editor.Editor
@@ -72,7 +71,7 @@ fun isCodeBlockIndented(code: String): String? {
 }
 
 private fun getScreenDeviceForPoint(point: Point): GraphicsDevice? {
-    val ge = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
+    val ge = GraphicsEnvironment.getLocalGraphicsEnvironment()
     return ge.screenDevices.find { device ->
         val bounds = device.defaultConfiguration.bounds
         point.x >= bounds.x &&
@@ -86,13 +85,11 @@ private fun getScreenDeviceForPoint(point: Point): GraphicsDevice? {
  * Adjusts popup position to avoid covering the current line when completion is very long
  *
  * @param point The original popup position
- * @param content The completion content
- * @param currentLine The current line text
  * @param popupWidth The popup width
  * @param popupHeight The popup height
- * @param editorWidth The editor width
- * @param editorHeight The editor height
  * @param lineHeight The line height
+ * @param indentWidth The indent width
+ * @param parentComponent The parent component to position relative to
  * @return The adjusted point
  */
 fun adjustPopupPositionForLongCompletion(
@@ -282,10 +279,7 @@ class PopupEditorComponent(
         private val DELETION_LINES_HIGHLIGHT_COLOR = JBColor(Color(240, 240, 240, 64), Color(60, 60, 60, 64))
     }
 
-    private val leadingNewlinesCount = oldContent.takeWhile { it == '\n' }.count()
-
     init {
-//        startOffset += leadingNewlinesCount
         if (content.isNotEmpty()) {
             oldContent = oldContent.trim('\n').trimEnd()
         }
@@ -559,13 +553,13 @@ class PopupEditorComponent(
                     val mappedIndex =
                         positionMapping[startOffset]
                             ?: return@forEach
-                    var localStartOffset = mappedIndex.coerceIn(0, document.textLength)
+                    val localStartOffset = mappedIndex.coerceIn(0, document.textLength)
 
                     val endPosition = (hunk.index + offsetAdjustment + hunk.additions.length).coerceIn(0, content.length)
                     val mappedEndPosition =
                         positionMapping[endPosition]
                             ?: return@forEach
-                    var endOffset = mappedEndPosition.coerceIn(0, document.textLength)
+                    val endOffset = mappedEndPosition.coerceIn(0, document.textLength)
 
                     val attributes =
                         TextAttributes(
@@ -854,8 +848,6 @@ class PopupEditorComponent(
         editor?.let { EditorFactory.getInstance().releaseEditor(it) }
         onDispose()
     }
-
-    private fun isCompletionPopupVisible(): Boolean = CompletionService.getCompletionService().currentCompletion != null
 
     private fun isPopupOutOfBounds(editor: Editor): Boolean {
         if (isPostJumpSuggestion) return false

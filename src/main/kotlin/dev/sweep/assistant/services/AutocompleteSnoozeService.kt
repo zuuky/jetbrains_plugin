@@ -8,9 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 @Service(Service.Level.PROJECT)
-class AutocompleteSnoozeService(
-    private val project: Project,
-) : Disposable {
+class AutocompleteSnoozeService : Disposable {
     companion object {
         fun getInstance(project: Project): AutocompleteSnoozeService = project.getService(AutocompleteSnoozeService::class.java)
 

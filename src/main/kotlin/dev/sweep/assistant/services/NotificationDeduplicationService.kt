@@ -31,7 +31,6 @@ class NotificationDeduplicationService(
         private fun createUserFriendlyErrorMessage(
             exception: Exception,
             originalTitle: String,
-            project: Project,
         ): Pair<String, String>? {
             val message = exception.toString()
             val exceptionType = exception::class.java.simpleName
@@ -142,43 +141,8 @@ class NotificationDeduplicationService(
     private var isDisposed = false
 
     /**
-     * Shows a notification with deduplication based on token overlap.
-     * If a similar notification was ever shown, this call will be ignored.
-     */
-    fun showNotificationWithDeduplication(
-        title: String,
-        content: String,
-        notificationGroup: String,
-        type: NotificationType = NotificationType.INFORMATION,
-    ) {
-        if (isDisposed) return
-
-        val newRecord = NotificationRecord(title, content, title, content, notificationGroup, type)
-
-        // Check for similar notifications that were ever shown
-        if (shouldDeduplicate(newRecord)) {
-            println("Deduplicated notification: $title")
-            return
-        }
-
-        // Store this notification for future deduplication
-        shownNotifications.add(newRecord)
-
-        // Show the notification
-        ApplicationManager.getApplication().invokeLater {
-            if (!isDisposed && !project.isDisposed) {
-                NotificationGroupManager
-                    .getInstance()
-                    .getNotificationGroup(notificationGroup)
-                    .createNotification(title, content, type)
-                    .notify(project)
-            }
-        }
-    }
-
-    /**
-     * Shows a notification with deduplication and also sends an error report if the notification passes deduplication.
-     * If a similar notification was ever shown, both the notification and error report will be ignored.
+     * Shows a notification with deduplication. If a similar notification was ever shown,
+     * this call is ignored. Network errors are mapped to user-friendly messages.
      */
     fun showNotificationWithDeduplicationAndErrorReporting(
         title: String,
@@ -186,12 +150,11 @@ class NotificationDeduplicationService(
         notificationGroup: String,
         type: NotificationType = NotificationType.INFORMATION,
         exception: Exception,
-        errorContext: String,
     ) {
         if (isDisposed) return
 
         // Create user-friendly error message for display (null means fail silently)
-        val userFriendlyMessage = createUserFriendlyErrorMessage(exception, title, project)
+        val userFriendlyMessage = createUserFriendlyErrorMessage(exception, title)
         val (userFriendlyTitle, userFriendlyContent) = userFriendlyMessage ?: (title to content)
         val newRecord = NotificationRecord(title, content, userFriendlyTitle, userFriendlyContent, notificationGroup, type)
 

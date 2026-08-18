@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package dev.sweep.assistant.utils
 
 import com.intellij.openapi.editor.Document
@@ -199,7 +201,7 @@ fun Color.withReducedSaturation(factor: Float): Color {
 
 /**
  * Reduces the saturation of a color while preserving perceptual luminance
- * @param factor The saturation multiplier (0.0 = no saturation, 1.0 = original saturation)
+ * @param saturationFactor The saturation multiplier (0.0 = no saturation, 1.0 = original saturation)
  */
 fun Color.withReducedSaturationPreservingLuminance(
     saturationFactor: Float, // 's' in our analysis (~0.5)
@@ -488,7 +490,7 @@ infix fun IntRange.distanceTo(other: Int): Int {
     if (other in this) {
         return 0
     }
-    return kotlin.math.min(abs(start - other), abs(endInclusive - other))
+    return min(abs(start - other), abs(endInclusive - other))
 }
 
 infix fun Int.distanceTo(other: IntRange): Int = other distanceTo this

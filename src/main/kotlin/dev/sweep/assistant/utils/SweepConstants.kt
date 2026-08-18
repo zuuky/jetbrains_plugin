@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package dev.sweep.assistant.utils
 
 import com.intellij.ide.plugins.PluginManagerCore
@@ -400,8 +402,8 @@ object SweepConstants {
 
     val FILE_MENTION_HIGHLIGHT_COLOR =
         JBColor(
-            java.awt.Color(0, 0, 0, 30), // Light mode: black with low alpha
-            java.awt.Color(255, 255, 255, 30), // Dark mode: white with low alpha
+            Color(0, 0, 0, 30), // Light mode: black with low alpha
+            Color(255, 255, 255, 30), // Dark mode: white with low alpha
         )
 
     val LANGUAGE_EXTENSIONS =

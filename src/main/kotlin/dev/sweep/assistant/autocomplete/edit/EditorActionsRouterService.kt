@@ -30,6 +30,7 @@ import java.awt.event.KeyEvent
  * the keystrokes used for accepting/rejecting autocomplete suggestions.
  */
 @Service(Service.Level.APP)
+@Suppress("DEPRECATION", "unused")
 class EditorActionsRouterService : Disposable {
     private val originals: MutableMap<String, EditorActionHandler> = mutableMapOf()
 
@@ -223,7 +224,7 @@ class EditorActionsRouterService : Disposable {
                             return
                         }
 
-                        if (true) {
+                        run {
                             val tracker = trackerFor(editor)
 
                             // Special case: Alt-Right (Next word) with acceptWordOnRightArrow setting
@@ -235,30 +236,28 @@ class EditorActionsRouterService : Disposable {
                                 settings?.acceptWordOnRightArrow == true &&
                                 tracker?.acceptNextWord() == true
                             ) {
-                                return
+                                return@doExecute
                             }
 
                             if (tracker == null) {
                                 original.execute(editor, caret, dataContext)
-                                return
+                                return@doExecute
                             }
 
                             // Runtime check: Is this action bound to accept?
                             if (actionId in activeAcceptActions && tracker.isCompletionShown) {
                                 tracker.acceptSuggestion()
-                                return
+                                return@doExecute
                             }
 
                             // Runtime check: Is this action bound to reject?
                             if (actionId in activeRejectActions && tracker.isCompletionShown) {
                                 tracker.rejectSuggestion()
-                                return
+                                return@doExecute
                             }
 
                             // Not bound to accept/reject, or no completion shown - execute original
                             original.execute(editor, caret, dataContext)
-                        } else {
-                            return
                         }
                     }
 
@@ -289,8 +288,9 @@ class EditorActionsRouterService : Disposable {
                         return
                     }
 
-                    if (true) {
-                        val tracker = trackerFor(editor) ?: return original.execute(editor, caret, dataContext)
+                    run {
+                        val tracker =
+                            trackerFor(editor) ?: return@doExecute original.execute(editor, caret, dataContext)
 
                         // Only intercept if TAB is configured as the accept key
                         if (tracker.isCompletionShown && IdeActions.ACTION_EDITOR_TAB in activeAcceptActions) {
@@ -298,8 +298,6 @@ class EditorActionsRouterService : Disposable {
                         } else {
                             original.execute(editor, caret, dataContext)
                         }
-                    } else {
-                        return
                     }
                 }
 

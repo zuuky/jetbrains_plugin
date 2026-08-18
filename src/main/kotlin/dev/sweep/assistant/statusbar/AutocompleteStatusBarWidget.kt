@@ -65,7 +65,7 @@ class AutocompleteStatusBarWidget(
     }
 
     // IconPresentation implementation
-    override fun getIcon(): Icon? {
+    override fun getIcon(): Icon {
         val baseIcon = IconLoader.getIcon("/icons/sweep16x16.svg", javaClass)
         if (snoozeService.isAutocompleteSnooze() || !isAlive) {
             return object : Icon {
@@ -75,16 +75,15 @@ class AutocompleteStatusBarWidget(
                     x: Int,
                     y: Int,
                 ) {
-                    g?.let { graphics ->
-                        if (graphics is Graphics2D) {
-                            val originalComposite = graphics.composite
-                            graphics.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.5f)
-                            baseIcon.paintIcon(c, graphics, x, y)
-                            graphics.composite = originalComposite
-                        } else {
-                            baseIcon.paintIcon(c, graphics, x, y)
-                        }
-                    } ?: baseIcon.paintIcon(c, g, x, y)
+                    val graphics: Graphics? = g
+                    if (graphics is Graphics2D) {
+                        val originalComposite = graphics.composite
+                        graphics.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.5f)
+                        baseIcon.paintIcon(c, graphics, x, y)
+                        graphics.composite = originalComposite
+                    } else {
+                        baseIcon.paintIcon(c, graphics, x, y)
+                    }
                 }
 
                 override fun getIconWidth(): Int = baseIcon.iconWidth
@@ -183,7 +182,7 @@ class AutocompleteStatusBarWidget(
                             actions[index].invoke()
                         }
                     }
-                    return PopupStep.FINAL_CHOICE
+                    return FINAL_CHOICE
                 }
 
                 override fun isSelectable(value: String?): Boolean = true

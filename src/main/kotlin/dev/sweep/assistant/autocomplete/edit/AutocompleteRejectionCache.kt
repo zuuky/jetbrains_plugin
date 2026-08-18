@@ -80,35 +80,33 @@ class AutocompleteRejectionCache(
             shownCache.add(Pair(suggestion.rejectionCacheKey(), System.currentTimeMillis()))
         }
 
-        if (reason in
-            listOf(
+        val lifespan = suggestion.getLifespan()
+        val isJumpToEdit = suggestion.type == AutocompleteSuggestion.SuggestionType.JUMP_TO_EDIT
+
+        shouldAddRejectionToCache =
+            when {
                 // Soft rejections
-                AutocompleteDisposeReason.CARET_POSITION_CHANGED,
-                AutocompleteDisposeReason.CLEARING_PREVIOUS_AUTOCOMPLETE,
-            )
-        ) {
-            if (suggestion.type == AutocompleteSuggestion.SuggestionType.JUMP_TO_EDIT) {
-                shouldAddRejectionToCache = suggestion.getLifespan() > 500L
-            } else {
-                shouldAddRejectionToCache = suggestion.getLifespan() > 750L
-            }
-        } else if (reason in
-            listOf(
+                reason == AutocompleteDisposeReason.CARET_POSITION_CHANGED ||
+                        reason == AutocompleteDisposeReason.CLEARING_PREVIOUS_AUTOCOMPLETE -> {
+                    if (isJumpToEdit) lifespan > 500L else lifespan > 750L
+                }
+
                 // Hard rejections
-                AutocompleteDisposeReason.EDITOR_LOST_FOCUS,
-                AutocompleteDisposeReason.AUTOCOMPLETE_DISPOSED,
-            )
-        ) {
-            if (suggestion.type == AutocompleteSuggestion.SuggestionType.JUMP_TO_EDIT) {
-                shouldAddRejectionToCache = suggestion.getLifespan() > 500L
-            } else if (suggestion.type == AutocompleteSuggestion.SuggestionType.POPUP) {
-                shouldAddRejectionToCache = suggestion.getLifespan() > 500L
-            } else if (suggestion.type == AutocompleteSuggestion.SuggestionType.GHOST_TEXT) {
-                shouldAddRejectionToCache = suggestion.getLifespan() > 1000L
+                reason == AutocompleteDisposeReason.EDITOR_LOST_FOCUS ||
+                        reason == AutocompleteDisposeReason.AUTOCOMPLETE_DISPOSED -> {
+                    when (suggestion.type) {
+                        AutocompleteSuggestion.SuggestionType.JUMP_TO_EDIT,
+                        AutocompleteSuggestion.SuggestionType.POPUP,
+                            -> lifespan > 500L
+
+                        AutocompleteSuggestion.SuggestionType.GHOST_TEXT -> lifespan > 1000L
+                        else -> false
+                    }
+                }
+
+                reason == AutocompleteDisposeReason.ESCAPE_PRESSED -> lifespan > 1500L
+                else -> false
             }
-        } else if (reason == AutocompleteDisposeReason.ESCAPE_PRESSED) {
-            shouldAddRejectionToCache = suggestion.getLifespan() > 1500L
-        }
         // Add if the suggestion was shown and it's not already in the map
         if (shouldAddRejectionToCache && suggestion.rejectionCacheKey() !in rejectionCache.map { it.first }) {
             rejectionCache.add(Pair(suggestion.rejectionCacheKey(), System.currentTimeMillis()))

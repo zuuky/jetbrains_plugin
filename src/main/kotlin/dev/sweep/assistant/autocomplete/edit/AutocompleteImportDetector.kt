@@ -24,20 +24,16 @@ import com.intellij.psi.SyntaxTraverser
 import com.intellij.util.concurrency.AppExecutorUtil
 import dev.sweep.assistant.services.FeatureFlagService
 import dev.sweep.assistant.services.SweepProjectService
+import java.util.*
 import java.util.Locale.getDefault
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.Future
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
+import java.util.concurrent.*
 
 /**
  * Detects and logs import fixes after autocomplete code insertion.
  * Uses daemon listener to piggyback on IntelliJ's existing analysis - no wasteful duplicate analysis!
  */
 @Service(Service.Level.PROJECT)
+@Suppress("DEPRECATION", "unused")
 class AutocompleteImportDetector(
     private val project: Project,
 ) : Disposable {
@@ -634,8 +630,12 @@ class AutocompleteImportDetector(
         // Use the first valid import fix for positioning the popup
         val firstFix = uniqueImportFixes.first()
         val firstHighlightInfo = firstFix.highlightInfo
-        val expectedText = firstHighlightInfo?.text
-        if (expectedText.isNullOrEmpty() || firstHighlightInfo == null) {
+        if (firstHighlightInfo == null) {
+            pendingChecks.remove(checkId)
+            return
+        }
+        val expectedText = firstHighlightInfo.text
+        if (expectedText.isEmpty()) {
             pendingChecks.remove(checkId)
             return
         }
@@ -711,6 +711,7 @@ class AutocompleteImportDetector(
     /**
      * Applies an import fix by invoking the intention action
      */
+    @Suppress("UnstableApiUsage", "NlsCapitalizationInspection", "DialogTitleCapitalization")
     private fun applyImportFix(
         editor: Editor,
         psiFile: PsiFile,
@@ -771,8 +772,7 @@ class AutocompleteImportDetector(
             SyntaxTraverser
                 .psiTraverser(psiFile)
                 .onRange(
-                    com.intellij.openapi.util
-                        .TextRange(startOffset, endOffset),
+                    TextRange(startOffset, endOffset),
                 ).traverse()
                 .any { element ->
                     val elementType =

@@ -19,32 +19,6 @@ import javax.swing.Icon
 
 private val logger = Logger.getInstance("dev.sweep.assistant.utils.Utils")
 
-/**
- * Custom implementation to replace deprecated IconUtil.colorize.
- * Creates a colored version of the given icon by applying a color overlay.
- */
-fun colorizeIcon(
-    icon: Icon,
-    color: java.awt.Color,
-): Icon {
-    val width = icon.iconWidth
-    val height = icon.iconHeight
-
-    val image = java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB)
-    val g2d = image.createGraphics()
-
-    // Draw the original icon
-    icon.paintIcon(null, g2d, 0, 0)
-
-    // Apply color overlay
-    g2d.composite = java.awt.AlphaComposite.SrcAtop
-    g2d.color = color
-    g2d.fillRect(0, 0, width, height)
-
-    g2d.dispose()
-    return javax.swing.ImageIcon(image)
-}
-
 class EvictingQueue<T>(
     private val maxSize: Int,
 ) : ConcurrentLinkedQueue<T>() {
@@ -89,25 +63,8 @@ class CaretPositionChangedAdapter(
     override fun caretPositionChanged(event: CaretEvent) = listener(event)
 }
 
-fun isIDEDarkMode(): Boolean {
-    try {
-        return !com.intellij.ui.JBColor.isBright()
-    } catch (e: Throwable) {
-        logger.warn("Error detecting IDE theme: ${e.message}")
-        return true
-    }
-}
-
 fun getCurrentSweepPluginVersion(): String? =
     PluginManagerCore.getPlugin(PluginId.getId(SweepConstants.PLUGIN_ID))?.version
-
-fun getApplicationVersion(): String =
-    try {
-        ApplicationInfo.getInstance().fullVersion
-    } catch (e: Exception) {
-        logger.warn("Error getting application version: ${e.message}")
-        "unknown"
-    }
 
 fun getDebugInfo(): String =
     try {
@@ -123,18 +80,6 @@ fun getDebugInfo(): String =
 fun userSpecificRepoName(project: Project): String {
     val repoName = project.basePath?.let { File(it).name } ?: "unknown"
     return repoName
-}
-
-fun <T> measureTimeAndLog(
-    description: String,
-    block: () -> T,
-): T {
-    val startTime = System.currentTimeMillis()
-    val result = block()
-    val endTime = System.currentTimeMillis()
-    val duration = endTime - startTime
-    logger.debug("$description took ${duration}ms")
-    return result
 }
 
 fun showNotification(

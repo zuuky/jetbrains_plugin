@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION", "UNCHECKED_CAST")
+
 package dev.sweep.assistant.autocomplete.edit
 
 import com.intellij.openapi.Disposable
@@ -635,7 +637,7 @@ sealed class AutocompleteSuggestion : Disposable {
             return offset
         }
 
-        override fun accept(editor: Editor): Disposable? {
+        override fun accept(editor: Editor): Disposable {
             val disposables = mutableListOf<Disposable>()
 
             val sortedSuggestions = ghostTextSuggestions.sortedBy { it.startOffset }

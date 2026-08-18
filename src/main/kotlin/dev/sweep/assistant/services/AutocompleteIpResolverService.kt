@@ -2,18 +2,14 @@ package dev.sweep.assistant.services
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationInfo
-import com.intellij.openapi.application.PermanentInstallationID
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.util.concurrency.annotations.RequiresBackgroundThread
 import dev.sweep.assistant.autocomplete.edit.NextEditAutocompleteRequest
 import dev.sweep.assistant.autocomplete.edit.NextEditAutocompleteResponse
+import dev.sweep.assistant.settings.SweepMetaData
 import dev.sweep.assistant.utils.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.future.await
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -29,21 +25,14 @@ import java.time.Duration
  * (remote URL when set, otherwise the local sweep-autocomplete server).
  */
 @Service(Service.Level.PROJECT)
-class AutocompleteIpResolverService(
-    private val project: Project,
-) : Disposable {
+class AutocompleteIpResolverService : Disposable {
     companion object {
         private val logger = Logger.getInstance(AutocompleteIpResolverService::class.java)
 
         fun getInstance(project: Project): AutocompleteIpResolverService = project.getService(AutocompleteIpResolverService::class.java)
 
         private const val READ_TIMEOUT_MS = 10_000L
-        private const val USER_ACTIVITY_TIMEOUT_MS = 15 * 60 * 1000L // 15 minutes
     }
-
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val lastUserActionTimestamp: java.util.concurrent.atomic.AtomicLong =
-        java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
 
     // HTTP client with connection pooling and keep-alive
     private val httpClient =
@@ -52,12 +41,6 @@ class AutocompleteIpResolverService(
             .version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(Duration.ofSeconds(3))
             .build()
-
-    /**
-     * Gets the shared HttpClient instance for connection pooling.
-     * This allows other services to use the same connection pool.
-     */
-    fun getSharedHttpClient(): HttpClient = httpClient
 
     /**
      * Executes a next edit autocomplete request against the configured server
@@ -94,7 +77,7 @@ class AutocompleteIpResolverService(
                     Pair(postDataBytes, false)
                 }
 
-            val authorization = "Bearer device_id_${PermanentInstallationID.get()}"
+            val authorization = "Bearer device_id_${SweepMetaData.getInstance().getOrCreateDeviceId()}"
 
             val httpRequestBuilder =
                 HttpRequest
@@ -167,24 +150,16 @@ class AutocompleteIpResolverService(
     /**
      * Gets the autocomplete server base URL (remote URL if set, otherwise local server).
      */
-    fun getBaseUrl(): String = LocalAutocompleteServerManager.getInstance().getServerUrl()
+    private fun getBaseUrl(): String = LocalAutocompleteServerManager.getInstance().getServerUrl()
 
     /**
-     * Updates the timestamp of the last user action.
+     * 记录最近的用户操作时间（本地构建仅保留接口，供调用方使用）。
      */
     fun updateLastUserActionTimestamp() {
-        lastUserActionTimestamp.set(System.currentTimeMillis())
-    }
-
-    /**
-     * Checks if there was user activity within the last 10 minutes.
-     */
-    private fun hasRecentUserActivity(): Boolean {
-        val currentTime = System.currentTimeMillis()
-        return (currentTime - lastUserActionTimestamp.get()) <= USER_ACTIVITY_TIMEOUT_MS
+        // no-op in local build
     }
 
     override fun dispose() {
-        scope.cancel()
+        // 共享 HttpClient 无需额外释放
     }
 }

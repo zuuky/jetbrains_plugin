@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package dev.sweep.assistant.utils
 
 import com.intellij.openapi.application.ApplicationManager
@@ -141,13 +143,17 @@ private fun readFileWithLimits(
         return file.readText()
     }
 
+    // Only maxChars is limited: read whole file then truncate by characters
+    if (maxLines == -1) {
+        return truncateText(file.readText(), maxLines, maxChars)
+    }
+
     val fileSize = file.length()
-    val estimatedSafeSize = if (maxLines == -1) Long.MAX_VALUE else maxLines * 100L // Rough estimate: 100 chars per line
+    val estimatedSafeSize = maxLines * 100L // Rough estimate: 100 chars per line
 
     // If file is small enough, read it all at once and truncate
     return if (fileSize <= estimatedSafeSize) {
-        val content = file.readText()
-        truncateText(content, maxLines, maxChars)
+        truncateText(file.readText(), maxLines, maxChars)
     } else {
         // File is large, read line by line to avoid memory issues
         val lines = mutableListOf<String>()
@@ -156,7 +162,7 @@ private fun readFileWithLimits(
 
         file.bufferedReader().use { reader ->
             var lineCount = 0
-            while (maxLines == -1 || lineCount < maxLines) {
+            while (lineCount < maxLines) {
                 val line = reader.readLine() ?: break
 
                 // Check if adding this line would exceed char limit
@@ -177,7 +183,7 @@ private fun readFileWithLimits(
         }
 
         val result = lines.joinToString("\n")
-        if (reachedLimit || (maxLines != -1 && lines.size >= maxLines)) {
+        if (reachedLimit || lines.size >= maxLines) {
             result + "\n\n[File contents truncated: showing first ${lines.size} lines, limited to $maxChars characters]"
         } else {
             result

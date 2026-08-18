@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package dev.sweep.assistant.autocomplete.edit
 
 import dev.sweep.assistant.data.BaseRequest

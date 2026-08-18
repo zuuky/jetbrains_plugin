@@ -44,7 +44,7 @@ class SweepCommitMessageAction : AnAction() {
 
         val isGenerating = try {
             SweepCommitMessageService.getInstance(project).isGenerating
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
 
@@ -65,7 +65,7 @@ class SweepCommitMessageAction : AnAction() {
 
         val sweepCommitMessageService = try {
             SweepCommitMessageService.getInstance(project)
-        } catch (ex: Exception) {
+        } catch (_: Exception) {
             return
         }
 
@@ -78,7 +78,7 @@ class SweepCommitMessageAction : AnAction() {
         SweepMetaData.getInstance().commitMessageButtonClicks++
 
         ProgressManager.getInstance().run(
-            object : Task.Backgroundable(project, "Generating Commit Message...", false) {
+            object : Task.Backgroundable(project, "Generating commit message...", false) {
                 override fun run(indicator: ProgressIndicator) {
                     indicator.isIndeterminate = true
 

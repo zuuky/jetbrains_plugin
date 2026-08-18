@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package dev.sweep.assistant.autocomplete.vim
 
 import com.intellij.openapi.Disposable
@@ -61,7 +63,7 @@ class VimMotionGhostTextHandler(
             return false
         }
 
-        if (!isLikelyInNormalMode(editor, charTyped)) {
+        if (!isLikelyInNormalMode(charTyped)) {
             return false
         }
 
@@ -78,10 +80,7 @@ class VimMotionGhostTextHandler(
      * Heuristically determine if we're likely in VIM normal mode
      * based on the character typed and editor state
      */
-    private fun isLikelyInNormalMode(
-        editor: Editor,
-        charTyped: Char,
-    ): Boolean {
+    private fun isLikelyInNormalMode(charTyped: Char): Boolean {
         // Only check for vertical motion commands (j, k) that cause the issue
         val verticalMotionChars = setOf('j', 'k')
 

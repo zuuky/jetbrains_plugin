@@ -76,26 +76,18 @@ class LocalAutocompleteServerManager : Disposable {
     fun getServerUrl(): String = getConfiguredRemoteUrl() ?: "http://localhost:${getPort()}"
 
     fun ensureServerRunning() {
-        ensureServerRunning(null)
-    }
-
-    fun ensureServerRunning(onStatus: ((String) -> Unit)?) {
         // When a remote URL is configured, no local server process is needed
         if (getConfiguredRemoteUrl() != null) {
-            onStatus?.invoke("Remote server URL configured, skipping local server startup.")
             return
         }
 
-        onStatus?.invoke("Checking if server is already running...")
         if (isServerHealthy()) {
-            onStatus?.invoke("Server is already running.")
             return
         }
         if (isStarting) {
-            onStatus?.invoke("Server is already starting...")
             return
         }
-        startServer(onStatus)
+        startServer(null)
     }
 
     fun isServerHealthy(): Boolean {
@@ -111,7 +103,7 @@ class LocalAutocompleteServerManager : Disposable {
                     .build()
             val response = httpClient.send(request, HttpResponse.BodyHandlers.discarding())
             response.statusCode() in 200..499
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
@@ -387,7 +379,7 @@ class LocalAutocompleteServerManager : Disposable {
         }
     }
 
-    fun restartServer() {
+    private fun restartServer() {
         logger.info("Restarting local autocomplete server")
         lastRestartTime = System.currentTimeMillis()
         stopServer()
@@ -398,7 +390,7 @@ class LocalAutocompleteServerManager : Disposable {
      * Builds the full command string for starting the server.
      * Returns null if uvx cannot be found (and uv install also fails).
      */
-    fun getServerCommand(): String? {
+    private fun getServerCommand(): String? {
         var uvxPath = resolveUvx()
         if (uvxPath == null) {
             logger.info("uvx not found, attempting to install uv")
@@ -419,6 +411,7 @@ class LocalAutocompleteServerManager : Disposable {
      * Starts the local autocomplete server in a visible IDE terminal tab.
      * If the server is already healthy, does nothing.
      */
+    @Suppress("DEPRECATION")
     fun startServerInTerminal(project: Project) {
         if (project.isDisposed) {
             logger.info("[LocalAutocompleteServerManager.startServerInTerminal] Project is disposed, skipping")
@@ -501,7 +494,7 @@ class LocalAutocompleteServerManager : Disposable {
                         .getInstance()
                         .getNotificationGroup("Sweep Autocomplete")
 
-                notificationGroup?.createNotification("Sweep Autocomplete", content, type)?.notify(null)
+                notificationGroup?.createNotification("Autocomplete server", content, type)?.notify(null)
             } catch (e: Exception) {
                 logger.warn("Failed to show notification: ${e.message}")
             }

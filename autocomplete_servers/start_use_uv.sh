@@ -52,7 +52,7 @@ PORT="${3:-8006}"
 
 # 安装相关
 # LLAMA_BUILD: wheel = 官方预编译 GPU wheel（默认） | source = CUDA 源码编译（网络差/下载慢时用）
-: "${LLAMA_BUILD:=wheel}"
+: "${LLAMA_BUILD:=source}"
 : "${LLAMA_WHL_CUDA:=cu124}"   # GPU wheel 标签，对应本机 CUDA 版本（cu121~cu126）
 : "${LLAMA_CMAKE_ARGS:=-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=80 -DGGML_CUDA_FA_ALL_QUANTS=ON}"   # source 模式 CMake 参数（A100=80）
 : "${FORCE_REINSTALL:=false}"  # true=强制重装依赖与 llama-cpp（切换安装模式时需用）
